@@ -22,3 +22,4 @@ uv.lock
 core
 core.*
 .playwright-cli/
+.DS_Store
