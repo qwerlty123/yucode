@@ -1,4 +1,4 @@
-"""Shell tools: foreground commands and background jobs."""
+"""Shell 工具:前台命令与后台任务。"""
 
 from __future__ import annotations
 
@@ -23,20 +23,16 @@ from yucode.tools.base import Tool
 
 
 class BashTool(Tool):
-    """Run one bash invocation in the workspace, streaming its output as it arrives.
+    """在工作区运行一次 bash 调用,并流式输出结果。
 
-    Confirmation is the default, and the read-only allowlist is the narrow exception — it exists
-    because this tool replaced the dedicated listing and search tools, and prompting for every `ls`
-    would be unusable. Auto-approval must hold for the whole command, not its first word: every stage
-    of a pipeline or `&&` chain must independently be read-only, redirection to a real path or command
-    substitution disqualifies it, and wrappers that can hide execution are never approved. This is a
-    prompting heuristic, not a sandbox; confirmation remains the real boundary.
+    默认需要确认,只读白名单是窄例外的存在——它之所以存在,是因为本工具取代了专门的
+    列出与搜索工具,若每次 `ls` 都要确认将无法使用。自动批准必须覆盖整条命令而非首词:
+    管道或 `&&` 链的每一段都必须独立地只读,重定向到真实路径或命令替换会使其失去资格,
+    能隐藏执行的包装命令永远不会被批准。这是提示启发式,而非沙箱;确认仍是真正的边界。
 
-    The process gets its own session, so cancelling kills the whole group instead of orphaning
-    children of an already-exited shell. Output is decoded incrementally per stream, so a multibyte
-    character split across reads survives. If it remains active past the foreground wait timeout,
-    the same process is registered as a background job and its bounded output tail remains available
-    through `Job`.
+    进程拥有自己的会话,因此取消会杀死整个进程组,而不是让已退出 shell 的子进程变成孤儿。
+    输出按流增量解码,跨读取被拆开的多字节字符也能存活。若它在前台等待超时后仍在运行,
+    同一进程会注册为后台任务,其有界输出尾部可通过 `Job` 获取。
     """
 
     NAME = "Bash"
@@ -64,20 +60,20 @@ class BashTool(Tool):
         if proc is not None and proc.poll() is None:
             self.kill_process_group(proc)
 
-    # Read-only executables that only inspect the filesystem/repo. A command built solely from these
-    # (and safe git subcommands) auto-runs without a confirmation prompt in non-yolo mode, replacing
-    # the dedicated List/Find/LineCount/read-only-Git tools that were removed in favour of Bash.
+    # 仅检查文件系统/仓库的只读可执行程序。只由它们(以及安全的 git 子命令)构成的命令
+    # 在非 yolo 模式下无需确认即可自动运行,取代了为 Bash 而移除的专用
+    # List/Find/LineCount/只读-Git 工具。
     # fmt: off
     SAFE_COMMANDS: ClassVar[frozenset[str]] = frozenset(
         {
-            # Common read-only inspection commands. The obvious file-writing forms (`sort -o`,
-            # `uniq IN OUT`, `sed -i`, `tree -o`) are guarded below; we do not chase exotic paths
-            # like sed's `w` command — common sense over exhaustive safety.
+            # 常见只读检查命令。明显的写文件形式(`sort -o`、`uniq IN OUT`、`sed -i`、
+            # `tree -o`)在下方被拦下;我们不追求 exotic 路径如 sed 的 `w` 命令——
+            # 常识优先于穷举式安全。
             "ls", "cat", "head", "tail", "wc", "find", "grep", "egrep", "fgrep", "rg", "sort", "uniq",
             "sed", "tree", "cut", "tr", "nl", "comm", "column", "fold", "paste", "join", "echo", "printf", "pwd",
             "stat", "file", "basename", "dirname", "realpath", "readlink", "which", "type",
             "diff", "cmp", "date", "printenv", "du", "df", "jq", "true", "test", "uname", "hostname",
-            # Benign builtin the model routinely prefixes (cd changes the subshell dir only).
+            # 模型经常前置的无害内建命令(cd 只改变子 shell 的目录)。
             "cd",
         }
     )
@@ -95,26 +91,24 @@ class BashTool(Tool):
 
     @classmethod
     def is_readonly(cls, command: str) -> bool:
-        """Conservatively classify a command as safe to auto-run. Bias hard toward False: a false
-        'safe' would run a mutating command without consent, while a false 'unsafe' only costs a
-        confirmation prompt. Rejects anything that can write, execute arbitrary code, or background."""
+        """保守地把命令归类为可自动运行。强烈偏向 False:误判"安全"会在未同意时运行
+        变更性命令,而误判"不安全"只多一次确认提示。拒绝任何能写入、执行任意代码
+        或转入后台的命令。"""
         command = command.strip()
         if not command:
             return False
-        # Normalize away the ubiquitous harmless redirections — discarding output to /dev/null and
-        # merging stderr/stdout — so the common `cmd 2>/dev/null` / `cmd >/dev/null 2>&1` forms are
-        # not treated as file writes.
+        # 规范化掉普遍存在的无害重定向——丢弃输出到 /dev/null、合并 stderr/stdout——
+        # 使常见的 `cmd 2>/dev/null` / `cmd >/dev/null 2>&1` 形式不被当作文件写入。
         scan = cls._DEV_NULL_REDIRECT_RE.sub(" ", command)
         scan = scan.replace("2>&1", " ").replace(">&2", " ")
-        # Anything still redirecting to/from a real path, or substituting a command, can write or
-        # run arbitrary code.
+        # 任何仍重定向到/自真实路径、或进行命令替换的内容都可能写入或执行任意代码。
         if any(ch in scan for ch in (">", "<", "`")) or "$(" in scan:
             return False
-        # Reject a lone background & (detaches a process); && and || are allowed sequence operators.
+        # 拒绝孤立的后台 &(它会脱离进程);&& 与 || 是允许的序列运算符。
         if cls._BACKGROUND_AMP_RE.search(scan):
             return False
-        # Split on every control operator (&& || | ; newline) and require EVERY stage to be a safe
-        # read-only command — so `git log && rm x` is not auto-approved on the strength of `git log`.
+        # 按每个控制运算符(&& || | ; 换行)切分,并要求每一段都是安全的只读命令——
+        # 这样 `git log && rm x` 不会因为 `git log` 而整体自动批准。
         return all(cls._safe_segment(part) for part in cls._CONTROL_OPERATOR_RE.split(scan) if part.strip())
 
     @classmethod
@@ -126,7 +120,7 @@ class BashTool(Tool):
         if not tokens:
             return False
         cmd = tokens[0]
-        # Env assignments and wrapper commands can hide arbitrary execution — never auto-approve.
+        # 环境变量赋值与包装命令可能隐藏任意执行——绝不自动批准。
         # fmt: off
         if "=" in cmd or cmd in {"env", "sudo", "eval", "exec", "command", "xargs", "nohup", "time",
                                  "watch", "bash", "sh", "zsh", "tee", "awk", "python", "python3"}:
@@ -136,22 +130,22 @@ class BashTool(Tool):
             return cls._safe_git(tokens)
         if cmd not in cls.SAFE_COMMANDS:
             return False
-        # Flags/args that turn a read-only command into a writer.
+        # 能把只读命令变成写入者的标志/参数。
         if cmd == "find" and any(t in {"-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprint0", "-fprintf", "-fls"} for t in tokens):
             return False
         if cmd == "sed" and any(t.startswith(("-i", "--in-place")) for t in tokens):
             return False
         if cmd == "tree" and any(t.startswith(("-o", "--output")) for t in tokens):
-            return False  # `tree -o FILE` writes the listing to a file
+            return False  # `tree -o FILE` 会把清单写入文件
         if cmd == "sort" and any(t.startswith(("-o", "--output")) for t in tokens):
-            return False  # `sort -o FILE` / `--output=FILE` writes to a file
-        # `uniq INPUT OUTPUT` writes the second file operand.
+            return False  # `sort -o FILE` / `--output=FILE` 会写入文件
+        # `uniq INPUT OUTPUT` 会写入第二个文件操作数。
         return not (cmd == "uniq" and cls._uniq_writes(tokens))
 
     @staticmethod
     def _uniq_writes(tokens: list[str]) -> bool:
-        # uniq writes only in the two-operand form `uniq [OPTS] INPUT OUTPUT`. Count positional
-        # operands, skipping the numeric argument that follows a value-taking short flag.
+        # uniq 只在双操作数形式 `uniq [OPTS] INPUT OUTPUT` 下写入。统计位置操作数,
+        # 跳过跟在取值短标志后的数值参数。
         value_flags = {"-f", "-s", "-w", "--skip-fields", "--skip-chars", "--check-chars"}
         operands = 0
         skip_next = False
@@ -228,8 +222,8 @@ class BashTool(Tool):
     def stream_process(self, proc: subprocess.Popen[bytes]) -> str:
         stdout_parts: list[str] = []
         stderr_parts: list[str] = []
-        # Per-stream incremental decoders so a multibyte UTF-8 character split across two 4096-byte
-        # reads is decoded once it is complete, instead of being mangled into replacement chars.
+        # 每路流使用增量解码器,跨两次 4096 字节读取拆开的多字节 UTF-8 字符
+        # 在完整后立即解码,而不是被破坏成替换字符。
         self._decoders = {"stdout": codecs.getincrementaldecoder("utf-8")("replace"), "stderr": codecs.getincrementaldecoder("utf-8")("replace")}
         selector = selectors.DefaultSelector()
         stdout, stderr = proc.stdout, proc.stderr
@@ -240,19 +234,17 @@ class BashTool(Tool):
         started = time.monotonic()
         shell_deadline = started + self.session.settings.shell_timeout
         wait_budget = self.session.settings.bash_wait_timeout
-        # Auto-promotion: if the command hasn't exited within bash_wait_timeout, hand the still-
-        # running proc to the background jobs registry and return control to the model with a
-        # partial-output payload. Disabled when the setting is 0 or the wait budget is already
-        # >= shell_timeout (in which case we would kill on the same deadline anyway).
+        # 自动提升:若命令在 bash_wait_timeout 内未退出,把仍在运行的进程交给后台任务注册表,
+        # 并带着部分输出载荷把控制权还给模型。该设置置 0 或等待预算已 >= shell_timeout 时
+        # 禁用(此时反正也会在同一截止时间杀掉)。
         promote_deadline = started + wait_budget if wait_budget and wait_budget < self.session.settings.shell_timeout else None
         try:
             while selector.get_map() or proc.poll() is None:
                 now = time.monotonic()
                 if promote_deadline is not None and now >= promote_deadline and proc.poll() is None:
-                    # Don't drain here: drain_selector does BLOCKING os.reads, which would wait
-                    # until bash produced more output (or exited) — defeating the whole point of
-                    # promotion. Whatever data the streaming loop already read is the partial
-                    # payload; anything still in-flight becomes the drainer thread's first read.
+                    # 这里不要排空:drain_selector 执行的是阻塞式 os.read,
+                    # 会一直等到 bash 产生更多输出(或退出)——那将违背提升的初衷。
+                    # 流式循环已读到的数据就是部分载荷;仍在途的数据成为排空线程的首次读取。
                     return self.promote_to_job(proc, selector, stdout_parts, stderr_parts)
                 remaining = shell_deadline - now
                 if remaining <= 0:
@@ -284,10 +276,10 @@ class BashTool(Tool):
         stdout_parts: list[str],
         stderr_parts: list[str],
     ) -> str:
-        """Hand off a still-running Bash proc to the background job registry. Closes the streaming
-        selector, starts a drainer thread that keeps reading proc.stdout/stderr into an in-memory
-        tail buffer (bounded), and returns a partial-output payload for the model."""
-        # Take pipe handles before closing the selector so the drainer can keep reading them.
+        """把仍在运行的 Bash 进程移交给后台任务注册表。关闭流式 selector,
+        启动一个排空线程持续把 proc.stdout/stderr 读入有界的内存尾部缓冲,
+        并为模型返回部分输出载荷。"""
+        # 在关闭 selector 前取走管道句柄,让排空线程能继续读取。
         stdout_pipe, stderr_pipe = proc.stdout, proc.stderr
         with contextlib.suppress(OSError):
             selector.close()
@@ -310,14 +302,13 @@ class BashTool(Tool):
             if pipe is None:
                 return
             try:
-                # read1 returns whatever is immediately available (line-buffered producers ship one
-                # line per call), so a slow trickle of output lands in the tail buffer promptly
-                # instead of blocking until a full 4KB is buffered.
+                # read1 立即返回当前可用的数据(行缓冲的生产者每次调用送出一行),
+                # 因此缓慢滴出的输出能及时进入尾部缓冲,而不用阻塞到攒满 4KB。
                 for chunk in iter(lambda: pipe.read1(4096), b""):
                     text = chunk.decode("utf-8", errors="replace")
                     with buffer_lock:
                         buffer.append(text)
-                        # Trim from the front once we exceed the cap, keeping the tail intact.
+                        # 超过上限后从前端裁剪,保持尾部完整。
                         total = sum(len(part) for part in buffer)
                         while total > BackgroundJob.BUFFER_LIMIT and len(buffer) > 1:
                             total -= len(buffer.pop(0))
@@ -356,8 +347,8 @@ class BashTool(Tool):
                 selector.unregister(key.fileobj)
             with contextlib.suppress(Exception):
                 cast(Any, key.fileobj).close()
-        # final=True on EOF flushes any bytes still buffered in the decoder (e.g. a truncated
-        # trailing character) so they are not silently dropped.
+        # EOF 时 final=True 会冲刷解码器中仍缓冲的字节(例如被截断的尾字符),
+        # 使它们不会被静默丢弃。
         text = self._decoders[key.data].decode(data, final=eof)
         if text:
             (stdout_parts if key.data == "stdout" else stderr_parts).append(text)
@@ -456,13 +447,11 @@ class JobTool(Tool):
             raise ToolError(f"too many active jobs ({active}/{self.MAX_JOBS}); kill or wait for one first")
         self.session.job_counter += 1
         job_id = f"job.{self.session.job_counter}"
-        # Log to disk (stdout+stderr merged) so we don't need a threaded drainer to keep the
-        # subprocess's OS-level pipe buffers from filling. The command is wrapped in a `{ ...; }`
-        # group so the redirection captures every stage of a compound command, not just the last
-        # (`a; b && c` would otherwise leak its earlier stages to the inherited stdout).
-        # `start_new_session` makes this shell its own process-group leader and the command inherits
-        # that group, so killpg(pid) reaches the command and its children; running it directly (no
-        # `exec`) keeps builtins like `cd` working.
+        # 记录到磁盘(stdout+stderr 合并),无需线程排空器就能避免子进程的 OS 级管道缓冲填满。
+        # 命令用 `{ ...; }` 分组包裹,使重定向捕获复合命令的每一段而非仅最后一段
+        # (否则 `a; b && c` 的早期段会泄漏到继承的 stdout)。
+        # `start_new_session` 使该 shell 成为自己的进程组组长,命令继承该组,
+        # 因此 killpg(pid) 能覆盖命令及其子进程;直接运行(不 `exec`)让 `cd` 等内建命令保持可用。
         fd, log_path = tempfile.mkstemp(prefix=f"nc-{job_id}-", suffix=".log")
         os.close(fd)
         proc = subprocess.Popen(
@@ -487,7 +476,7 @@ class JobTool(Tool):
         job = self._resolve_job(payload)
         timeout = payload.get("timeout")
         with contextlib.suppress(subprocess.TimeoutExpired):
-            # timeout omitted or 0 means block until the process exits (per the schema).
+            # timeout 省略或为 0 表示阻塞到进程退出(按 schema 定义)。
             job.process.wait(timeout=None if not timeout else max(1, int(timeout)))
         job.update_status()
         return self._format(job, payload)
@@ -511,7 +500,7 @@ class JobTool(Tool):
         job_id = str(payload.get("job") or "").strip()
         if not job_id:
             raise ToolError("job id required")
-        # Allow bare numeric IDs as a shorthand for the canonical "job.N" form.
+        # 允许裸数字 ID 作为规范 "job.N" 形式的简写。
         if job_id not in self.session.jobs and not job_id.startswith("job.") and job_id.isdigit():
             job_id = f"job.{job_id}"
         job = self.session.jobs.get(job_id)

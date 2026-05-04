@@ -1,6 +1,6 @@
-"""yucode entry point: command-line argument parsing and dispatch.
+"""yucode 入口:命令行参数解析与分发。
 
-Invoked through the ``yucode`` console script or ``python -m yucode``.
+通过 ``yucode`` 控制台脚本或 ``python -m yucode`` 调用。
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ import subprocess
 import sys
 import threading
 
-from yucode.base import Config, ConfigError, ConfigFile, YucodeError, RuntimeSettings, UpdateStatus, __version__
+from yucode.base import Config, ConfigError, ConfigFile, RuntimeSettings, UpdateStatus, YucodeError, __version__
 from yucode.engine import Agent
 from yucode.loop import CommandLoop
 from yucode.render import Theme
@@ -21,11 +21,11 @@ from yucode.update import UpdateChecker
 
 
 def run_update() -> int:
-    """Check PyPI for a newer yucode and upgrade it via the detected package manager."""
+    """检查 PyPI 上是否有更新的 yucode,并通过检测到的包管理器升级。"""
     print(f"yucode {__version__}")
     try:
         latest = UpdateChecker.fetch_latest()
-    except Exception as error:  # noqa: BLE001 - update failures from any network/backend layer are reported uniformly.
+    except Exception as error:  # noqa: BLE001 - 任何网络/后端层的更新失败都统一报告。
         print(f"Error: could not check the latest version: {error}", file=sys.stderr)
         return 1
     if not UpdateStatus(latest=latest).newer_than(__version__):
@@ -41,37 +41,31 @@ def run_update() -> int:
 
 
 def warm_provider_sdks() -> None:
-    """Import the provider SDKs off the main thread so the prompt accepts input immediately.
+    """在主线程之外导入供应商 SDK,让提示符能立即接受输入。
 
-    ModelClient imports them lazily because they cost ~0.8s, which was the whole of the delay
-    before a fresh prompt echoed keystrokes. Loading them here in the background keeps the prompt
-    instant without moving that cost onto the first request: the user's first message takes far
-    longer to type than the import takes to finish.
+    ModelClient 延迟导入它们,因为它们耗时约 0.8 秒,而这正是新提示符回显按键前的全部延迟。
+    在这里后台加载可以保持提示符即时响应,又不必把这笔开销转移到首次请求上:
+    用户输入第一条消息所花的时间远多于导入完成所需的时间。
 
-    Racing this thread against the request path is safe, and deliberately so:
+    让该线程与请求路径竞争是安全的,而且是有意为之:
 
-    - CPython locks imports per module (`importlib._bootstrap._ModuleLock`), so a request-path
-      `from openai import OpenAI` that lands mid-warm-up blocks on that module's lock and then
-      reads the finished module from `sys.modules`. It cannot observe a half-initialized module,
-      and both threads therefore bind the same class object.
-    - Per-module locks can deadlock only on an import cycle entered from two threads at once.
-      `anthropic` and `openai` do not import each other, and their shared dependencies form a DAG,
-      so the lock-wait graph has no cycle. `_DeadlockError` detection is the backstop if that ever
-      stops being true.
-    - The thread is a daemon because warming must never delay exit. CPython freezes daemon threads
-      at finalization rather than letting them run against a torn-down import system, so quitting
-      mid-import is silent.
+    - CPython 按模块加锁导入(`importlib._bootstrap._ModuleLock`),因此请求路径上落在
+      预热期间的 `from openai import OpenAI` 会阻塞在该模块的锁上,然后从 `sys.modules`
+      读取已完成的模块。它不可能观察到半初始化的模块,两个线程因此绑定到同一个类对象。
+    - 按模块加锁只可能在两个线程同时进入导入环时死锁。`anthropic` 与 `openai` 互不导入,
+      且它们共享的依赖构成 DAG,所以锁等待图没有环。若这一点将来不再成立,
+      `_DeadlockError` 检测是兜底。
+    - 该线程是守护线程,因为预热绝不能拖延退出。CPython 在终结阶段冻结守护线程,
+      而不是让它们对着已拆除的导入系统运行,因此导入中途退出时静默无痕。
 
-    Verified by stress test: a barrier-synchronized four-way race and repeated immediate-exit runs
-    produce no deadlock, no exception, and no stderr noise.
+    经压力测试验证:栅栏同步的四路竞争与反复的立即退出运行均无死锁、无异常、无 stderr 噪音。
     """
 
     def load() -> None:
-        # Warming is only an optimization, and an uncaught failure here would print a thread
-        # traceback over the live prompt. Any real problem resurfaces on the request path, which
-        # imports the same modules and reports the failure to the user.
+        # 预热只是优化;此处未捕获的失败会在活动提示符上打印线程回溯。
+        # 任何真实问题都会在请求路径上再次浮现,那里导入相同的模块并向用户报告失败。
         with contextlib.suppress(Exception):
-            import anthropic  # noqa: F401 - imported for its side effect of populating sys.modules
+            import anthropic  # noqa: F401 - 导入以产生填充 sys.modules 的副作用
             import openai  # noqa: F401
 
     threading.Thread(target=load, name="sdk-warmup", daemon=True).start()
@@ -113,9 +107,9 @@ def main(argv: list[str] | None = None) -> int:
             path, created = ConfigFile.init(args.config)
             print(("Created" if created else "Exists") + " config: " + path)
             return 0
-        # Switching sessions ends one run and starts the next rather than re-pointing a live
-        # object graph at another Session: everything below is built around one, and this is the
-        # only moment nothing is running. Teardown stays in the `finally` that already does it.
+        # 切换会话是结束一次运行并开始下一次,而不是把存活的对象图重指向另一个 Session:
+        # 下面的一切都围绕单个 Session 构建,而此刻是唯一没有任何运行中的时刻。
+        # 清理逻辑仍留在现有的 `finally` 中。
         resume = args.resume or ("latest" if args.continue_project else "")
         while True:
             if resume:

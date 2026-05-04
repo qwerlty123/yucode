@@ -1,4 +1,4 @@
-"""yucode MCP: Model Context Protocol server integration."""
+"""yucode MCP:Model Context Protocol 服务器集成。"""
 
 from __future__ import annotations
 
@@ -88,7 +88,7 @@ class MCPFileTokenStore:
             value = entry.get("value")
             return dict(value) if isinstance(value, dict) else None
 
-    # Called dynamically through the MCP OAuth token-storage protocol; static call graphs will not see it.
+    # 该方法由 MCP OAuth token 存储协议动态调用,静态调用图分析不会发现它。
     async def put(self, key: str, value: Json, *, collection: str | None = None, ttl: float | None = None) -> None:
         collection = collection or self.DEFAULT_COLLECTION
         expires_at = time.time() + float(ttl) if ttl is not None else None
@@ -132,7 +132,7 @@ class MCPFileTokenStore:
             try:
                 file = os.fdopen(fd, "w", encoding="utf-8")
             except Exception:
-                # os.fdopen doesn't close fd on failure; do it ourselves so the descriptor doesn't leak.
+                # os.fdopen 失败时不会关闭 fd;这里手动关闭,避免描述符泄漏。
                 os.close(fd)
                 raise
             with file:
@@ -165,22 +165,19 @@ class MCPResourceInfo:
 
 
 class MCPManager:
-    """Manage configured MCP servers and expose bounded model- and user-facing views.
+    """管理已配置的 MCP 服务器,并对外暴露有界(有限大小)的模型侧与用户侧视图。
 
-    Servers are external, so nothing here may be load-bearing. Discovery runs concurrently in the
-    background, and a slow, broken, or unauthorized server records its reason and drops out of the
-    index rather than failing the session. Connection state is therefore something to display, not an
-    error to raise.
+    服务器是外部系统,因此这里的一切都不得成为关键路径。发现过程在后台并发执行;
+    缓慢、损坏或未授权的服务器只会记录原因并从索引中退出,而不会让会话失败。
+    因此连接状态是用于展示的信息,而不是要抛出的错误。
 
-    Only a bounded summary of a catalog reaches the model: schemas and descriptions are capped per
-    tool and overall, because a verbose server would otherwise spend the context budget every turn
-    merely by existing. Full schemas stay available on demand through describe. The same normalized
-    catalog produces command listings and connection status without making the command loop
-    understand MCP schemas or failure states.
+    只有目录的有界摘要会到达模型:schema 与描述按单个工具和整体双重设限,
+    否则一个冗长的服务器仅凭存在就会每轮耗尽上下文预算。完整 schema 仍可通过 describe 按需获取。
+    同一份规范化目录也用于生成命令列表和连接状态,命令循环无需理解 MCP schema 或失败状态。
 
-    Each operation opens its own short-lived client, so no connection is durable state. That costs a
-    process start per stdio call and is why the lifecycle rework is on the roadmap in DESIGN.md.
-    Discovery and its asyncio loop run off the main thread, so the catalog and status are lock-guarded.
+    每个操作都打开自己的短生命周期客户端,因此连接不是持久状态。代价是每次 stdio 调用都要
+    启动一个进程,这也是 DESIGN.md 中生命周期重构列上路线图的原因。发现过程及其 asyncio 循环
+    运行在主线程之外,因此目录与状态都由锁保护。
     """
 
     RAW_OUTPUT_LIMIT: ClassVar[int] = 200_000
@@ -189,8 +186,8 @@ class MCPManager:
     DESCRIBE_DESCRIPTION_LIMIT: ClassVar[int] = 1_000
     DESCRIBE_ARGUMENT_LIMIT: ClassVar[int] = 50
     DESCRIBE_ARGUMENT_DESCRIPTION_LIMIT: ClassVar[int] = 160
-    INDEX_SCHEMA_LIMIT: ClassVar[int] = 700  # per-tool schema cap in the early (cached) tools index
-    INDEX_TOTAL_LIMIT: ClassVar[int] = 16_000  # overall cap for the tools index block
+    INDEX_SCHEMA_LIMIT: ClassVar[int] = 700  # 早期(缓存)工具索引中每个工具的 schema 上限
+    INDEX_TOTAL_LIMIT: ClassVar[int] = 16_000  # 工具索引块的总体上限
     STATUS_MARKER: ClassVar[str] = "●"
     AUTH_STATUS_RE: ClassVar[re.Pattern] = re.compile(r"\b(?:401|403)\b")
 
@@ -202,8 +199,8 @@ class MCPManager:
         self.server_errors: dict[str, str] = {}
         self.server_skips: dict[str, str] = {}
         self.lock = threading.Lock()
-        self.discovery_status: str = "stale"  # stale | discovering | ready | error
-        self.index_truncated: bool = False  # set by render_tools_index when even name-only overflows the cap
+        self.discovery_status: str = "stale"  # 取值:stale | discovering | ready | error
+        self.index_truncated: bool = False  # 由 render_tools_index 设置:仅名称都溢出上限时为真
         self._configs_cache: list[MCPServerConfig] | None = None
         self._oauth_token_store = MCPFileTokenStore(self.session.data_path("mcp-oauth", "tokens.json"))
         self._oauth_lock = threading.Lock()
@@ -215,7 +212,7 @@ class MCPManager:
         self._closed = False
 
     def parse_configs(self) -> list[MCPServerConfig]:
-        # Config and selector are immutable for the session, so parse once and reuse.
+        # 配置与选择器在整个会话内不可变,因此解析一次后复用。
         if self._configs_cache is None:
             self._configs_cache = self._parse_configs()
         return self._configs_cache
@@ -339,7 +336,7 @@ class MCPManager:
                         futures = [executor.submit(self._discover_one, config) for config in discoverable]
                         for future in as_completed(futures):
                             future.result()
-        except Exception as error:  # noqa: BLE001 - discovery aggregates failures from arbitrary MCP transports.
+        except Exception as error:  # noqa: BLE001 - 发现过程汇总任意 MCP 传输层产生的失败
             with self.lock:
                 self.server_errors["-"] = str(error)
 
@@ -391,9 +388,8 @@ class MCPManager:
                     if not self._oauth_reauthorization_required(name):
                         return self._connect_result(name, compact=_compact)
                 with self._oauth_lock:
-                    # The token and registered OAuth client form one credential set. If
-                    # either is rejected, discard both so the new random callback port is
-                    # registered together with the replacement token.
+                    # token 与已注册的 OAuth 客户端构成一套凭据。只要其一被拒绝,
+                    # 就同时丢弃两者,使新的随机回调端口能与替换后的 token 一起注册。
                     self._oauth_token_store.clear_server(config.url)
                     if error := self._authenticate_oauth(config, notify=notify):
                         if _compact:
@@ -404,7 +400,7 @@ class MCPManager:
         return self._connect_result(name, compact=_compact)
 
     def _compact_line(self, kind: str, name: str, detail: str) -> str:
-        """One-line server status used by the batch connect/manager UIs: '● kind  `name` — detail'."""
+        """批量连接/管理界面使用的一行服务器状态:'● kind  `name` — detail'。"""
         return f"{self.STATUS_MARKER} {kind}  `{name}` — {detail}"
 
     def _oauth_reauthorization_required(self, name: str) -> bool:
@@ -437,7 +433,7 @@ class MCPManager:
         interactive: bool = False,
         notify: Callable[[str], None] | None = None,
     ) -> str:
-        """Connect a de-duplicated batch concurrently while preserving result order."""
+        """并发连接一批去重后的服务器,同时保持结果顺序。"""
         selected = list(dict.fromkeys(names))
         if len(selected) == 1:
             return self.connect_server(selected[0], interactive=interactive, notify=notify)
@@ -483,7 +479,7 @@ class MCPManager:
             self.set_server_error(config.name, self.error_text(error, timeout=self.discovery_timeout()))
 
     async def _gather_assets(self, config: MCPServerConfig, headers: dict[str, str]) -> tuple[list[Tool], list[Resource]]:
-        """Fetch tools and resources concurrently. Tool failure aborts discovery; resources are best-effort."""
+        """并发获取工具与资源。工具失败会中止发现;资源则尽力而为。"""
         tools_co = self._list_tools(config, headers)
         resources_co = self._list_resources(config, headers)
         tools, resources = await asyncio.gather(tools_co, resources_co, return_exceptions=True)
@@ -597,7 +593,7 @@ class MCPManager:
                 raise ToolError("MCP manager is closed")
             if self._loop is not None and self._loop.is_running() and self._loop_thread is not None and self._loop_thread.is_alive():
                 return self._loop
-            # Previous thread died or loop stopped; reset and recreate.
+            # 之前的线程已退出或事件循环已停止;重置并重建。
             self._loop = None
             self._loop_thread = None
             ready = threading.Event()
@@ -634,10 +630,9 @@ class MCPManager:
             raise ToolError("MCP call was cancelled") from error
 
     def close(self) -> None:
-        # Stop and join the background loop before the interpreter tears down its
-        # default executors. Otherwise an in-flight client cleanup (HTTP session
-        # termination, DNS via run_in_executor) races the concurrent.futures atexit
-        # shutdown and prints "cannot schedule new futures after shutdown".
+        # 在解释器拆除默认执行器之前停止并 join 后台事件循环。否则正在进行的客户端清理
+        # (HTTP 会话终止、经 run_in_executor 的 DNS 查询)会与 concurrent.futures 的
+        # atexit 关停竞争,并打印 "cannot schedule new futures after shutdown"。
         with self._loop_lock:
             if self._closed:
                 return
@@ -662,11 +657,11 @@ class MCPManager:
                 asyncio.run_coroutine_threadsafe(_shutdown(), loop).result(timeout=5)
             except concurrent.futures.TimeoutError:
                 pass
-            except Exception:  # noqa: BLE001, S110 - shutdown is best-effort after cancellation.
+            except Exception:  # noqa: BLE001, S110 - 取消后的关停是尽力而为。
                 pass
             try:
                 loop.call_soon_threadsafe(loop.stop)
-            except Exception:  # noqa: BLE001, S110 - the event loop may already be closed.
+            except Exception:  # noqa: BLE001, S110 - 事件循环可能已经关闭。
                 pass
         if thread.is_alive():
             thread.join(timeout=5)
@@ -683,8 +678,8 @@ class MCPManager:
                 await super().redirect_handler(authorization_url)
 
         return YucodeOAuth(
-            # FastMCP types this as its full AsyncKeyValue protocol, although TokenStorageAdapter
-            # only calls get/put/delete. MCPFileTokenStore deliberately implements that used subset.
+            # FastMCP 将其类型标注为完整的 AsyncKeyValue 协议,尽管 TokenStorageAdapter
+            # 只调用 get/put/delete。MCPFileTokenStore 刻意只实现被用到的这个子集。
             token_storage=self._oauth_token_store,  # pyright: ignore[reportArgumentType]
             client_name="yucode",
             callback_timeout=self.session.settings.shell_timeout,
@@ -694,8 +689,8 @@ class MCPManager:
         from fastmcp.client.transports import StdioTransport, StreamableHttpTransport
 
         if config.command:
-            # The MCP SDK replaces (not merges) the subprocess environment when env is set,
-            # so layer the configured vars over the inherited environment to keep PATH etc.
+            # 设置 env 时 MCP SDK 会替换(而非合并)子进程环境,
+            # 因此把配置的变量叠加在继承的环境之上,以保留 PATH 等。
             env = {**os.environ, **config.env} if config.env else None
             return StdioTransport(command=config.command, args=list(config.args), env=env)
         return StreamableHttpTransport(config.url, headers=headers)
@@ -710,7 +705,7 @@ class MCPManager:
         interactive: bool = False,
         notify: Callable[[str], None] | None = None,
     ) -> _MCPResultT:
-        """Enter a fastmcp Client (with OAuth if config.auth=='oauth') and await one operation."""
+        """进入一个 fastmcp Client(若 config.auth=='oauth' 则带 OAuth),等待一次操作完成。"""
         from fastmcp.client import Client
 
         timeout = self.call_timeout() if long_timeout or interactive else self.discovery_timeout()
@@ -753,9 +748,8 @@ class MCPManager:
         return headers
 
     def _resolve_server(self, server: str) -> tuple[MCPServerConfig, dict[str, str]]:
-        """Look up a configured server and build its request headers, raising ToolError with a
-        user-facing message on a missing, errored, or unauthenticated server. Shared by tool and
-        resource calls."""
+        """查找已配置的服务器并构造请求头;当服务器缺失、出错或未认证时抛出带用户可读
+        信息的 ToolError。工具调用与资源调用共用。"""
         config = self.find_config(server)
         if config is None:
             raise ToolError(f"MCP server '{server}' not found")
@@ -770,7 +764,7 @@ class MCPManager:
         return config, headers
 
     def _require_available(self, server: str) -> None:
-        """Raise ToolError if a configured server has a failure state or is not connected."""
+        """当已配置的服务器处于故障状态或未连接时抛出 ToolError。"""
         if issue := self.server_issue(server):
             raise ToolError(f"MCP server '{server}' {issue[0]}: {issue[1]}")
         if not self.connected(server):
@@ -781,7 +775,7 @@ class MCPManager:
 
         try:
             result = self.run_async(self._call_tool(config, headers, tool_name, arguments))
-        except Exception as e:  # noqa: BLE001 - normalize arbitrary MCP transport errors as ToolError.
+        except Exception as e:  # noqa: BLE001 - 把任意的 MCP 传输错误规范为 ToolError。
             raise ToolError("MCP call failed: " + self.error_text(e))
 
         text = self.normalize_result(result)
@@ -804,19 +798,18 @@ class MCPManager:
         config, headers = self._resolve_server(server)
         try:
             result = self.run_async(self._read_resource(config, headers, uri))
-        except Exception as e:  # noqa: BLE001 - normalize arbitrary MCP transport errors as ToolError.
+        except Exception as e:  # noqa: BLE001 - 把任意的 MCP 传输错误规范为 ToolError。
             raise ToolError("MCP resource read failed: " + self.error_text(e))
         text = self.normalize_resource(result)
         return f"<MCPResource server={json.dumps(server)} uri={json.dumps(uri)}>\n{text}\n</MCPResource>"
 
-    AUTO_READ_LIMIT: ClassVar[int] = 6_000  # per-doc cap for resources auto-injected on first tool call
+    AUTO_READ_LIMIT: ClassVar[int] = 6_000  # 首次工具调用时自动注入的每个资源文档的大小上限
 
     def auto_read_prefix(self, server: str, tool_name: str) -> str:
-        """On the first call to a tool whose description references a resource doc, fetch it once.
+        """在首次调用描述中引用了资源文档的工具时,获取该文档一次。
 
-        Returns a block to attach to that call's result (so the grammar reaches the model on the
-        first attempt and lands in cached history), or "" when there is nothing new to inject.
-        Best-effort: failures are swallowed and never retried for the same uri.
+        返回要附加到该次调用结果上的块(使语法提示在首次尝试时就到达模型并进入缓存历史),
+        若无新内容可注入则返回 ""。尽力而为:失败会被吞掉,且同一 uri 不会重试。
         """
         info = self.tool_info(server, tool_name)
         if info is None:
@@ -827,14 +820,14 @@ class MCPManager:
             if (server, uri) in self._auto_read_done:
                 continue
             scheme = uri.split("://", 1)[0].lower()
-            # Only fetch things we can actually read over MCP: advertised resources or custom
-            # (non-web) schemes. Plain http(s) links are left for the model to read explicitly.
+            # 只获取能通过 MCP 真正读到的内容:已公布(advertised)的资源或自定义(非 web)scheme。
+            # 普通 http(s) 链接留给模型自行显式读取。
             if uri not in advertised and scheme in ("http", "https"):
                 continue
-            self._auto_read_done.add((server, uri))  # mark before fetching so failures don't retry
+            self._auto_read_done.add((server, uri))  # 先标记再获取,失败也不会重试
             try:
                 blocks.append(self.read_resource(server, uri)[: self.AUTO_READ_LIMIT])
-            except Exception:  # noqa: BLE001, S112 - referenced resources are injected best-effort.
+            except Exception:  # noqa: BLE001, S112 - 被引用的资源尽力注入,失败即跳过。
                 continue
         if not blocks:
             return ""
@@ -843,7 +836,7 @@ class MCPManager:
 
     @staticmethod
     def _dump_object(item: Any) -> str:
-        """Render a non-str/dict MCP item: pydantic-style model_dump as JSON, else str()."""
+        """渲染非 str/dict 的 MCP 条目:有 pydantic 风格 model_dump 的转成 JSON,否则用 str()。"""
         if hasattr(item, "model_dump"):
             return json.dumps(item.model_dump(mode="json"), ensure_ascii=False, indent=2)
         return str(item)
@@ -873,7 +866,7 @@ class MCPManager:
         return f"- {label} - {desc}" if desc else f"- {label}"
 
     def _join_bounded(self, parts: list[str]) -> str:
-        """Join non-empty parts and clip to RAW_OUTPUT_LIMIT with a truncation marker."""
+        """连接非空部分,截断到 RAW_OUTPUT_LIMIT 并附加截断标记。"""
         text = "\n".join(part for part in parts if part).strip()
         if len(text) > self.RAW_OUTPUT_LIMIT:
             text = text[: self.RAW_OUTPUT_LIMIT] + f"\n<MCPOutputTruncated chars={json.dumps(len(text))}/>"
@@ -881,7 +874,7 @@ class MCPManager:
 
     @staticmethod
     def _schema_props_required(schema: Json) -> tuple[Json, list[Any]]:
-        """Extract a JSON-Schema object's `properties` dict and `required` list, tolerant of bad types."""
+        """提取 JSON-Schema 对象的 `properties` 字典与 `required` 列表,对类型错误保持宽容。"""
         props = schema.get("properties", {})
         required = schema.get("required", [])
         return (props if isinstance(props, dict) else {}, required if isinstance(required, list) else [])
@@ -913,13 +906,13 @@ class MCPManager:
         return self._join_bounded(parts)
 
     def _authenticate_oauth(self, config: MCPServerConfig, notify: Callable[[str], None] | None = None) -> str | None:
-        """Validate cached OAuth credentials or complete interactive authorization."""
+        """校验缓存的 OAuth 凭据,或完成交互式授权。"""
         headers = self._build_mcp_headers(config)
         if isinstance(headers, str):
             return headers
         try:
             self.run_async(self._run_op(config, headers, lambda c: c.list_tools(), interactive=True, notify=notify))
-        except Exception as error:  # noqa: BLE001 - OAuth probes cross third-party MCP transports.
+        except Exception as error:  # noqa: BLE001 - OAuth 探测会跨越第三方 MCP 传输层。
             text = self.error_text(error, timeout=self.call_timeout())
             self.set_server_error(config.name, text)
             return self.oauth_auth_failure(config, text)
@@ -949,7 +942,7 @@ class MCPManager:
         return self._render_describe(server, info)
 
     def _render_describe(self, server: str, info: MCPToolInfo) -> str:
-        from yucode.tools import Tool  # local import: tools is built on top of mcp
+        from yucode.tools import Tool  # 局部导入:tools 构建在 mcp 之上
 
         schema = info.input_schema or {}
         lines = [f"<MCPDescribe server={json.dumps(server)} tool={json.dumps(info.name)}>"]
@@ -977,23 +970,21 @@ class MCPManager:
         return "\n".join(lines)
 
     def render_tools_index(self) -> str:
-        """Render the MCP tools block injected into every model turn (in the cached prefix).
+        """渲染注入每一轮模型对话(缓存前缀中)的 MCP 工具块。
 
-        The block is capped at INDEX_TOTAL_LIMIT so it cannot bloat each request. When it
-        would overflow we degrade by shedding *detail*, never *entities*: the model can
-        always re-fetch a dropped schema via `describe`, but it can never call a server or
-        tool it was never told exists. So we try progressively cheaper renderings and emit
-        the richest one that fits:
+        该块以 INDEX_TOTAL_LIMIT 为上限,不会撑大每次请求。将要溢出时,降级策略是削减
+        *细节*而非*实体*:模型随时可以通过 `describe` 重新获取被丢弃的 schema,但它永远无法
+        调用一个从未被告知存在的服务器或工具。因此这里依次尝试更廉价的渲染方式,输出能装下
+        的最丰富的一种:
 
-            tier 1 "schema" — full per-tool JSON schemas inline (normal case)
-            tier 2 "args"   — schemas dropped, name + arg summary per tool
-            tier 3 "names"  — name-only, grouped per server
-            tier 4          — hard truncate (only at thousands of tools, where 16KB
-                              physically cannot hold them); server headers come first so
-                              the model still sees most servers exist.
+            tier 1 "schema" — 内联每个工具的完整 JSON schema(常规情况)
+            tier 2 "args"   — 丢弃 schema,每个工具只保留名称 + 参数摘要
+            tier 3 "names"  — 仅名称,按服务器分组
+            tier 4          — 硬截断(仅在工具数量上千、16KB 物理上装不下时);
+                              服务器标题排在最前,模型仍能看到大多数服务器存在。
 
-        Tiers 1–3 keep every connected server and tool name visible. See _index_body for how
-        each detail level is rendered, and test_mcp.TestToolIndexBudget for the guarantees.
+        第 1-3 层保证每个已连接的服务器与工具名都可见。各细节层的渲染方式见 _index_body,
+        相关保证见 test_mcp.TestToolIndexBudget。
         """
         activated = self.tools.keys() | self.resources.keys()
         configs = [config for config in self.parse_configs() if config.name in activated]
@@ -1010,9 +1001,8 @@ class MCPManager:
             "",
         ]
 
-        # A note tells the model what was shed (and that describe recovers it) so it does not
-        # assume a tool is argument-less. Tier 1 ("schema") needs no note; tier 4 reuses the
-        # last (tier 3) text below.
+        # 备注告诉模型丢了什么(以及 describe 可以找回),避免它误以为某个工具没有参数。
+        # 第 1 层("schema")无需备注;第 4 层复用下面第 3 层的文本。
         notes = {
             "args": ['Schemas omitted to fit; use MCP(action="describe", server, tool) for a tool\'s arguments.', ""],
             "names": ['Only tool names shown to fit; use MCP(action="describe", server, tool) before calling.', ""],
@@ -1024,35 +1014,35 @@ class MCPManager:
                 self.index_truncated = False
                 return text
 
-        # Tier 4: even name-only overflows, so some tools are dropped entirely (not just
-        # detail). Flag it so the CLI can warn the user — unlike tiers 1-3 these tools are
-        # not callable until the index fits (fewer servers, or consult /mcp tools).
+        # 第 4 层:连仅名称都会溢出,因此一些工具被整体丢弃(不只是细节)。
+        # 标记该状态以便 CLI 提醒用户——与第 1-3 层不同,在索引能装下之前
+        # 这些工具不可调用(可减少服务器数量,或查阅 /mcp tools)。
         self.index_truncated = True
         return text[: self.INDEX_TOTAL_LIMIT - 10] + "\n... MCP tools truncated; use /mcp tools for full list."
 
     def _resources_block(self, server: str, resources: list[MCPResourceInfo]) -> list[str]:
-        """The 'resources (N) — read with ...' header plus one line per resource, or [] if none."""
+        """'resources (N) — read with ...' 标题加每个资源一行,无资源时返回 []。"""
         if not resources:
             return []
         header = f'resources ({len(resources)}) — read with MCP(action="read_resource", server={json.dumps(server)}, uri=...):'
         return [header, *(self._format_resource_line(res) for res in resources)]
 
     def _server_lines(self, server: str, tools: list[MCPToolInfo], resources: list[MCPResourceInfo], *, include_schema: bool = True) -> list[str]:
-        """A server's header, tool lines, and resources block — shared by the tools index and mentions."""
+        """服务器的标题、工具行与资源块——工具索引与提及(@)渲染共用。"""
         lines = [f"[{server}] {server.capitalize()}"]
         lines.extend(line for info in tools if (line := self._format_tool_line(server, info, include_schema=include_schema)))
         lines.extend(self._resources_block(server, resources))
         return lines
 
     def _index_body(self, configs: list[MCPServerConfig], *, detail: str = "schema") -> list[str]:
-        """Render the per-server body lines of the tools index at one detail level.
+        """按某一细节级别渲染工具索引中每个服务器的正文行。
 
-        detail controls how much of each tool is emitted (richest to cheapest):
-            "schema" — full line via _format_tool_line, including the inline JSON schema
-            "args"   — same line without the schema (name + arg summary + description)
-            "names"  — one "tools: a, b, c" line per server, names only
+        detail 控制每个工具输出多少内容(从最丰富到最简略):
+            "schema" — 经 _format_tool_line 的完整行,含内联 JSON schema
+            "args"   — 同样的行但不带 schema(名称 + 参数摘要 + 描述)
+            "names"  — 每个服务器一行 "tools: a, b, c",仅名称
 
-        Every connected server is represented regardless of detail.
+        无论细节级别如何,每个已连接的服务器都会出现。
         """
         lines: list[str] = []
         pending: list[str] = []
@@ -1078,7 +1068,7 @@ class MCPManager:
         return lines
 
     def server_issue(self, name: str) -> tuple[str, str] | None:
-        """Classify a server's failure state as (kind, message); error takes precedence over skip."""
+        """把服务器的故障状态归类为 (kind, message);error 优先于 skip。"""
         if (error := self.server_errors.get(name)) is not None:
             return "error", error
         if (skip := self.server_skips.get(name)) is not None:
@@ -1106,7 +1096,7 @@ class MCPManager:
         blocks: list[str] = []
         for raw_server, raw_tool in self.MENTION_PATTERN.findall(text):
             name = raw_server if raw_server in configs else lower.get(raw_server.lower())
-            if name is None:  # not a configured server — leave the literal @token alone
+            if name is None:  # 不是已配置的服务器——原样保留 @token 字面量
                 continue
             key = (name, raw_tool)
             if key in seen:
@@ -1150,8 +1140,8 @@ class MCPManager:
         line = f"{server}.{info.name}{args_str} - {desc}"
         if len(line) > 200:
             line = line[:197] + "..."
-        # The full description (often naming a resource doc with the argument grammar) is
-        # truncated above, so surface any resource-like URIs it mentions explicitly.
+        # 完整描述(往往点名了含参数语法的资源文档)在上方被截断,
+        # 因此把其中提到的类资源 URI 显式列出来。
         uris = self._extract_uris(info.description)
         if uris:
             line += '\n  refs (read with MCP action="read_resource"): ' + ", ".join(uris)
@@ -1165,7 +1155,7 @@ class MCPManager:
 
     @classmethod
     def _extract_uris(cls, text: str, limit: int = 5) -> list[str]:
-        """Pull resource-like URIs out of free text, deduped and lightly de-punctuated."""
+        """从自由文本中提取类资源 URI,去重并轻量去除标点。"""
         seen: list[str] = []
         for match in cls.URI_PATTERN.findall(text or ""):
             uri = match.rstrip(".,;:")
@@ -1177,7 +1167,7 @@ class MCPManager:
 
     @staticmethod
     def _schema_json(schema: Json, limit: int) -> str:
-        """Render a remote tool's input schema as compact JSON, capped at `limit` chars (0 = no cap)."""
+        """把远端工具的输入 schema 渲染为紧凑 JSON,上限 `limit` 字符(0 表示不限)。"""
         if not isinstance(schema, dict) or not schema:
             return ""
         text = json.dumps(schema, ensure_ascii=False, separators=(",", ":"))
@@ -1212,7 +1202,7 @@ class MCPManager:
         return "".join(parts)
 
     def render_tool_listing(self, server: str | None = None) -> str:
-        from yucode.tools import Tool  # local import: tools is built on top of mcp
+        from yucode.tools import Tool  # 局部导入:tools 构建在 mcp 之上
 
         sections: list[str] = []
         configs = self.parse_configs()

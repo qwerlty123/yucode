@@ -1,4 +1,4 @@
-"""Local image input lifecycle and protocol payloads."""
+"""本地图片输入的完整生命周期与协议载荷。"""
 
 from __future__ import annotations
 
@@ -82,7 +82,7 @@ class ImageRef:
 
 
 class UserInput(str):
-    """A draft string whose one-cell image markers map to immutable image references."""
+    """一份草稿字符串,其中单格图片标记映射到不可变的图片引用。"""
 
     images: tuple[ImageRef, ...]
 
@@ -108,7 +108,7 @@ class UserInput(str):
 
 
 class ImageInputs:
-    """Own image recognition, storage, transport, and learned model capability for a session."""
+    """负责一个会话的图片识别、存储、传输,以及学习到的模型图片能力。"""
 
     _TOKEN_RE = re.compile(r"(?:'[^'\n]*'|\"(?:\\.|[^\"\n])*\"|(?:\\.|[^\s])+)")
     _IMAGE_STATUS_RE = re.compile(r"\b(?:400|415|422)\b")
@@ -137,15 +137,15 @@ class ImageInputs:
         images = cls.refs(message)
         if not images:
             return content
-        # Current messages store labels in content. Keep older or hand-written structured
-        # messages readable when their metadata has no visible labels.
+        # 当前消息把标签存在 content 里。当元数据中没有可见标签时,
+        # 也要让旧消息或手写的结构化消息保持可读。
         if any(f"[Image #{index}" in content for index in range(1, len(images) + 1)):
             return content
         labels = " ".join(f"[Image #{index} \u00b7 {image.name}]" for index, image in enumerate(images, 1))
         return " ".join(part for part in (labels, content) if part)
 
     def recognize(self, text: str, existing: tuple[ImageRef, ...] = ()) -> UserInput:
-        """Replace readable local image path tokens with markers, preserving existing markers."""
+        """把可读的本地图片路径 token 替换为标记,并保留已有的标记。"""
 
         if text.lstrip().startswith("/") and "\n" not in text:
             return UserInput(text, existing)
@@ -213,14 +213,14 @@ class ImageInputs:
         }
 
     def load(self, path: str, *, source_text: str = "") -> ImageRef:
-        """Validate and store one explicit local image for model input."""
+        """校验并存储一张显式指定的本地图片,用于模型输入。"""
 
         image = self._inspect(path, source_text=source_text or path)
         assert image is not None
         return self.prepare(UserInput(IMAGE_MARKER, (image,))).images[0]
 
     def tool_observation(self, images: tuple[ImageRef, ...]) -> Json:
-        """Build a durable multimodal user-role observation produced by a tool batch."""
+        """构建由工具批次产生的、持久的用户角色多模态观察消息。"""
 
         markers = " ".join(IMAGE_MARKER for _image in images)
         message = self.message(UserInput(TOOL_IMAGE_OBSERVATION_PREFIX + "\n" + markers, images))
@@ -411,7 +411,7 @@ class ImageInputs:
 
     @staticmethod
     def _estimated_tokens(image: ImageRef) -> int:
-        """Use the common 512px-tile estimate without putting encoded bytes in context."""
+        """使用常见的 512px 方块估算,不必把编码后的字节放进上下文。"""
 
-        tiles = max(1, (image.width + 511) // 512) * max(1, (image.height + 511) // 512)
+        tiles = max(1, (image.width + 511) // 512) * max(1, (image.height + 511) // 512)  # 512px 方块计数
         return 85 + 170 * tiles

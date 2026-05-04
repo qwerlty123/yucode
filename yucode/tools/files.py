@@ -1,4 +1,4 @@
-"""File tools: reading, image viewing, and anchored editing."""
+"""文件工具:读取、图片查看与基于锚点的编辑。"""
 
 from __future__ import annotations
 
@@ -63,16 +63,16 @@ class ReadTool(Tool):
 
     @staticmethod
     def line_hash(line: str) -> str:
-        # Hash the visible content only. The trailing newline is stripped so the anchor matches the
-        # line the model sees (anchor_line displays the stripped line), stays stable when only the
-        # final newline changes, and is consistent with indexed_line_hash.
+        # 只对可见内容做哈希。剥离末尾换行,使锚点与模型看到的行一致
+        # (anchor_line 显示的就是剥离后的行),仅在末尾换行变化时保持稳定,
+        # 并与 indexed_line_hash 保持一致。
         return Text.base36(int(hashlib.sha1(line.rstrip("\n").encode("utf-8")).hexdigest()[:6], 16)).rjust(5, "0")
 
     @staticmethod
     def split_lines(text: str) -> list[str]:
-        # Canonical line model shared by Read and Edit: split on "\n" only, keeping the newline
-        # (like file.readlines()). str.splitlines(True) also breaks on \r, \v, \f, \x1c-\x1e, \x85,
-        # \u2028, \u2029, which would number lines differently than Read and desync anchors.
+        # Read 与 Edit 共用的规范行模型:只按 "\n" 切分,并保留换行符(与 file.readlines() 相同)。
+        # str.splitlines(True) 还会在 \r、\v、\f、\x1c-\x1e、\x85、 、  处断开,
+        # 导致行号与 Read 不一致并使锚点失同步。
         parts = text.split("\n")
         lines = [part + "\n" for part in parts[:-1]]
         if parts[-1]:
@@ -101,7 +101,7 @@ class ReadTool(Tool):
 
     @staticmethod
     def require_anchor(anchor: str) -> tuple[int, str]:
-        """Parse an anchor or raise the standard ToolError guiding the model to a real one."""
+        """解析锚点,否则抛出标准的 ToolError,引导模型使用真实锚点。"""
         parsed = ReadTool.parse_anchor(anchor)
         if parsed is None:
             raise ToolError('invalid anchor; use the "anchor=line:hash" value from Read, Search, or InspectCode')
@@ -227,20 +227,17 @@ class EditApplyResult:
 
 
 class EditTool(Tool):
-    """Create or patch one file through content-verified anchors rather than line numbers.
+    """通过内容校验的锚点(而非行号)创建或修补一个文件。
 
-    An anchor pairs a line index with a hash of that line's content, so an edit carries proof of what
-    the model believed it was editing. A bare line number silently targets whatever moved into that
-    position; here a mismatch is refused and reported with the line actually found. That check is what
-    makes edits safe to plan and confirm before writing.
+    锚点把行索引与该行内容的哈希配对,因此一次编辑自带"模型认为它在编辑什么"的凭证。
+    裸行号会静默命中任何移动到该位置的文本;这里不匹配会被拒绝,并报告实际找到的行。
+    正是这项检查使编辑可以在落盘前安全地规划与确认。
 
-    Strict but not brittle: when the expected content still exists exactly once and has drifted only a
-    short distance, the anchor relocates to it, since earlier edits shifting lines is ordinary rather
-    than a conflict. Ambiguity or distance is refused instead of guessed, because a wrong resolution
-    corrupts a file silently.
+    严格但不脆弱:当期望内容仍恰好存在一次、且只漂移了一小段距离时,锚点会重新定位到它,
+    因为先前编辑造成行位移是常态而非冲突。歧义或距离过大时选择拒绝而不是猜测,
+    因为错误的解析会静默损坏文件。
 
-    A call that would change nothing is an error rather than a silent success — the model needs to
-    learn that its anchor or search text was wrong.
+    不会产生任何变化的调用是错误而非静默成功——模型需要意识到它的锚点或搜索文本错了。
     """
 
     NAME = "Edit"
@@ -288,8 +285,8 @@ class EditTool(Tool):
         if not isinstance(raw_edits, list):
             return [path, raw_edits]
 
-        # Some models repeat the top-level path inside an edit operation. It is safe to discard
-        # only an exact duplicate; a different nested path remains invalid and is rejected later.
+        # 有些模型会在编辑操作内部重复顶层的 path。只有完全相同的重复项才可以安全丢弃;
+        # 不同的嵌套 path 仍然无效,会在后续被拒绝。
         edits = []
         for item in raw_edits:
             if isinstance(item, dict) and item.get("path") == path:
@@ -383,7 +380,7 @@ class EditTool(Tool):
         return path, edits
 
     def _validate_target(self, path: str, creating: bool) -> bool:
-        """Validate an edit/create target and return whether its current contents should be read."""
+        """校验编辑/创建目标,并返回是否应读取其当前内容。"""
 
         if os.path.exists(path):
             if creating:
@@ -415,17 +412,15 @@ class EditTool(Tool):
         return path, original, created, result
 
     def apply(self, original: str, edits: list[Edit], anchor_resolver: Callable[[str], int] | None = None) -> EditApplyResult:
-        """Apply one call's edits to a file's lines, returning the new content and its change spans.
+        """把一次调用中的多个编辑应用到文件行上,返回新内容及其变更区间。
 
-        Anchors are resolved against the original lines before anything is spliced, and the splices are
-        then applied in reverse index order so each one leaves the earlier indices untouched. Resolving
-        as you go, or splicing forward, shifts every later anchor by the size of the previous edit.
-        Overlaps are rejected once the anchors are known and before any splice runs: two edits
-        claiming the same range cannot both be honored, and the model needs to be told rather than
-        silently obeyed.
+        锚点先基于原始行全部解析完,然后按索引逆序应用拼接,使每个拼接都不影响更早的索引。
+        边解析边应用、或按正序拼接,都会让后面的每个锚点被前一个编辑的大小位移。
+        锚点确定后、任何拼接执行前会拒绝重叠:两个声称同一范围的编辑不可能同时被满足,
+        模型需要被告知这一点,而不是被静默纵容。
 
-        `changes` is rebuilt afterwards in forward order with a running delta, because it describes
-        positions in the file that now exists rather than the one the anchors named.
+        `changes` 之后按正序带运行中增量重建,因为它描述的是现在已存在的文件中的位置,
+        而不是锚点所指向的那个旧文件。
         """
         if edits[0].op == "create":
             lines = self.content_lines(edits[0].content, False)

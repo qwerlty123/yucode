@@ -1,4 +1,4 @@
-"""Model-facing prompts and prompt templates used by yucode."""
+"""yucode 使用的面向模型的提示词及提示词模板。"""
 
 SYSTEM_PROMPT = """\
 You are yucode, a terminal coding agent.
@@ -66,7 +66,7 @@ CURRENT_TURN_CONTEXT_TRIMMED = "Current turn context was deterministically trimm
 
 
 def compaction_input(*, state: str, previous_summary: str, older_messages: str, recent_messages: str) -> str:
-    return "\n\n".join(
+    return "\n\n".join(  # 用空行连接各部分
         [
             "State:\n" + state,
             "Previous Summary:\n" + (previous_summary or "(empty)"),

@@ -1,4 +1,4 @@
-"""yucode command loop and interactive session runtime."""
+"""yucode 命令循环与交互式会话运行时。"""
 
 from __future__ import annotations
 
@@ -39,12 +39,12 @@ from yucode.base import (
     LogLine,
     LogRole,
     MalformedToolCallError,
-    YucodeError,
     ProviderConfig,
     Text,
     ToolCall,
     ToolError,
     TurnBox,
+    YucodeError,
     __version__,
 )
 from yucode.engine import Agent
@@ -63,6 +63,8 @@ from yucode.update import UpdateChecker
 
 SetHandler = tuple[str, str, Callable[[str], int | float | None] | None]
 # fmt: off
+# /set 处理器表:键 -> (目标对象, 属性名, 值转换函数)。转换函数同时负责边界约束
+# (如 max_steps 至少为 1);转换抛 ConfigError/ValueError 时视为非法值。
 SET_HANDLERS: dict[str, SetHandler] = {
     "provider.temperature": ("provider", "temperature", lambda v: None if v == "off" else float(v)),
     "provider.max_tokens": ("provider", "max_tokens", lambda v: max(0, int(v))),
@@ -77,7 +79,7 @@ SET_HANDLERS: dict[str, SetHandler] = {
     "runtime.bash_wait_timeout": ("settings", "bash_wait_timeout", lambda v: max(0, int(v))),
 }
 SET_KEYS = tuple(SET_HANDLERS)
-# Keys whose values are a closed set: rejected by /set when unknown, and offered whole as completions.
+# 值为封闭集合的键:/set 遇到未知值会拒绝,并整体作为补全候选项提供。
 SET_CHOICES: dict[str, tuple[str, ...]] = {
     "provider.stream": ("on", "off"),
     "provider.image_input": IMAGE_INPUT_CHOICES,
@@ -90,8 +92,8 @@ SET_VALUES: dict[str, tuple[str, ...]] = {
 
 
 class CommandCompleter(Completer):
-    MCP_MENTION_RE: ClassVar[re.Pattern] = re.compile(r"@([A-Za-z0-9_.-]*)$")
-    SKILL_MENTION_RE: ClassVar[re.Pattern] = re.compile(r"(?<![A-Za-z0-9_])\$([A-Za-z0-9_-]*)$")
+    MCP_MENTION_RE: ClassVar[re.Pattern] = re.compile(r"@([A-Za-z0-9_.-]*)$")  # 行尾 @server[.tool] 提及
+    SKILL_MENTION_RE: ClassVar[re.Pattern] = re.compile(r"(?<![A-Za-z0-9_])\$([A-Za-z0-9_-]*)$")  # 行尾 $skill 提及(前面不能是标识符字符)
 
     def __init__(
         self,
@@ -115,10 +117,10 @@ class CommandCompleter(Completer):
         if text.startswith("/set "):
             tail = text[len("/set ") :]
             if " " not in tail:
-                yield from self.matches(SET_KEYS, tail)
+                yield from self.matches(SET_KEYS, tail)  # 还没输值:补全键名
                 return
             key, _, value = tail.partition(" ")
-            yield from self.matches(SET_VALUES.get(key, ()), value)
+            yield from self.matches(SET_VALUES.get(key, ()), value)  # 已输值:补全该键的合法取值
             return
         for command, values in (
             ("/model ", self.models),
@@ -138,7 +140,7 @@ class CommandCompleter(Completer):
                 return
             sub, _, value = tail.partition(" ")
             if sub == "connect":
-                completed, _, prefix = value.rpartition(" ")
+                completed, _, prefix = value.rpartition(" ")  # 已选过的服务器不能再选:按空格拆分去重
                 selected = set(completed.split())
                 yield from self.matches((name for name in self.mcp_servers() if name not in selected), prefix)
                 return
@@ -153,9 +155,9 @@ class CommandCompleter(Completer):
         if at_match:
             server_part, dot, tool_part = at_match.group(1).partition(".")
             if dot:
-                yield from self.matches(self.mcp_tools(server_part), tool_part)
+                yield from self.matches(self.mcp_tools(server_part), tool_part)  # @server. 后补工具名
             else:
-                yield from self.matches(self.mcp_servers(), server_part)
+                yield from self.matches(self.mcp_servers(), server_part)  # 裸 @ 补服务器名
             return
 
         skill_match = CommandCompleter.SKILL_MENTION_RE.search(text)
@@ -164,7 +166,7 @@ class CommandCompleter(Completer):
             return
 
         if text.startswith("/") and " " not in text:
-            yield from self.matches(CommandLoop.COMMANDS, text)
+            yield from self.matches(CommandLoop.COMMANDS, text)  # 斜杠命令补全
 
     @staticmethod
     def matches(values, prefix: str):
@@ -172,31 +174,29 @@ class CommandCompleter(Completer):
 
 
 class CommandLoop:
-    """Own session behavior: read input, dispatch commands, drive turns, and route output.
+    """拥有会话行为:读取输入、分发命令、驱动回合、路由输出。
 
-    Slash commands are handled here and never reach the model. The agent runs on this thread while
-    prompt-toolkit runs on another, which is why output has two destinations: completed user,
-    assistant, and tool output goes to native scrollback, while drafts, previews, queue state, and
-    selectors belong to the TUI. Anything transient the terminal leaves in scrollback is an artifact,
-    not history — the transcript is always rebuilt from semantic records.
+    斜杠命令在这里处理,永远不会到达模型。agent 在本线程运行,而 prompt-toolkit 在另一
+    个线程,这正是输出有两个去向的原因:已完成的 user/assistant/工具输出进入原生
+    scrollback,而草稿、预览、队列状态和选择器属于 TUI。终端留在 scrollback 里的任何
+    临时内容都只是痕迹,不是历史——转录始终由语义记录重建。
 
-    Input entered mid-turn is queued, and only an allowlist of read-only commands may run against a
-    busy session; anything that mutates configuration would change the meaning of a turn already in
-    flight.
+    回合进行中输入会被排队,只有白名单里的只读命令允许在忙碌的 session 上运行;任何
+    会改动配置的命令都会改变已在进行中的回合的含义。
 
-    The same object serves the non-interactive path, where there is no TUI and input and output are
-    plain callables — which is also how the tests drive it.
-    """
+    同一个对象也服务于非交互路径:那里没有 TUI,输入输出只是普通 callable——测试也是
+    这样驱动它的。"""
 
-    HUNK_HEADER_RE: ClassVar[re.Pattern] = re.compile(r"^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@")
-    HELP_HEADING_RE: ClassVar[re.Pattern] = re.compile(r"^### (.+)$", re.MULTILINE)
-    HELP_ENTRY_RE: ClassVar[re.Pattern] = re.compile(r"^- (.+?) — ", re.MULTILINE)
+    HUNK_HEADER_RE: ClassVar[re.Pattern] = re.compile(r"^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@")  # diff hunk 头:捕获旧/新行数
+    HELP_HEADING_RE: ClassVar[re.Pattern] = re.compile(r"^### (.+)$", re.MULTILINE)  # 帮助文本的 ### 标题
+    HELP_ENTRY_RE: ClassVar[re.Pattern] = re.compile(r"^- (.+?) — ", re.MULTILINE)  # 帮助文本的命令条目
     QUEUE_EMPTY_HINT = "Enter queues follow-up · Ctrl-C interrupts"
     QUEUE_PENDING_HINT = "↑ recalls queued · Ctrl-C interrupts"
-    TRANSCRIPT_DIFF_LINES: ClassVar[int] = 40
-    EDITOR_CONTEXT_MAX_LINES: ClassVar[int] = 200
-    INPUT_HISTORY_BYTES: ClassVar[int] = 512 * 1024
+    TRANSCRIPT_DIFF_LINES: ClassVar[int] = 40  # 回放时每个 Edit diff 预览的最大行数
+    EDITOR_CONTEXT_MAX_LINES: ClassVar[int] = 200  # 外部编辑器上下文的最大行数
+    INPUT_HISTORY_BYTES: ClassVar[int] = 512 * 1024  # 输入历史文件大小上限(512KB)
     # fmt: off
+    # 斜杠命令 -> 处理方法名;"/exit"、"/quit" 不在此表,由 command() 单独处理。
     COMMAND_HANDLERS: ClassVar[dict[str, str]] = {
         "/help": "help", "/status": "status", "/ps": "ps_command", "/diff": "diff_command",
         "/skills": "skills_command", "/config": "config",
@@ -207,12 +207,13 @@ class CommandLoop:
     COMMANDS: ClassVar[tuple[str, ...]] = tuple(COMMAND_HANDLERS) + ("/exit", "/quit")
     # fmt: on
 
-    # Commands safe to run from the follow-up input while the agent works: read-only
-    # views plus /yolo, whose single atomic flag flip the agent simply reads at the next approval.
+    # agent 工作时允许从跟进输入框运行的命令:只读视图外加 /yolo——
+    # /yolo 只是翻转一个原子标志,agent 在下一次审批时读取即可,不会改变在飞回合。
     QUEUE_RUN_COMMANDS: ClassVar[frozenset[str]] = frozenset({"/help", "/status", "/skills", "/ps", "/mcp", "/diff", "/yolo", "/hints", "/resend"})
     MODEL_CONFIGURED_LABEL = "---- Configured models ----"
     MODEL_DISCOVERED_LABEL = "---- Discovered models ----"
     MODEL_LABELS = frozenset((MODEL_CONFIGURED_LABEL, MODEL_DISCOVERED_LABEL))
+    # /mcp 子命令 -> (最少参数个数, 最多参数个数, 用法说明)。
     MCP_COMMANDS: ClassVar[dict[str, tuple[int, int, str]]] = {
         "connect": (1, sys.maxsize, "Usage: /mcp connect <server> [server ...]"),
         "disconnect": (1, 1, "Usage: /mcp disconnect <server>"),
@@ -268,20 +269,23 @@ Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall, Note, Ask, MCP, S
 
     @classmethod
     def bounded_diff(cls, text: str) -> tuple[str, bool]:
+        # 大 diff 会撑爆 /diff 输出:按字节数和行数双重封顶,返回 (截断文本, 是否被截断)。
         if len(text.encode("utf-8")) <= cls.DIFF_MAX_BYTES and text.count("\n") <= cls.DIFF_MAX_LINES:
             return text, False
         clipped: list[str] = []
         length = 0
         for line in text.splitlines():
-            line_bytes = len(line.encode("utf-8")) + 1
+            line_bytes = len(line.encode("utf-8")) + 1  # +1 是换行符的字节
             if length + line_bytes > cls.DIFF_MAX_BYTES or len(clipped) >= cls.DIFF_MAX_LINES:
-                break
+                break  # 任一上限达到即停:不切半行,保证截断处是完整行
             clipped.append(line)
             length += line_bytes
         return "\n".join(clipped), True
 
     @staticmethod
     def diff_counts(text: str) -> tuple[int, int]:
+        # 统计 diff 里的增删行数:hunk 头给出各块的配额,只统计配额内的 +/- 行;
+        # 上下文行(" ")会消耗配额,避免把相邻 hunk 的计数弄混。
         added = removed = 0
         old_remaining = new_remaining = 0
         for line in text.splitlines():
@@ -295,14 +299,14 @@ Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall, Note, Ask, MCP, S
                 removed += 1
                 old_remaining -= 1
             elif line.startswith(" "):
-                old_remaining = max(0, old_remaining - 1)
+                old_remaining = max(0, old_remaining - 1)  # 上下文行:双边配额都减
                 new_remaining = max(0, new_remaining - 1)
         return added, removed
 
     def __init__(self, agent: Agent, input_fn=input, output_fn=print):
         self.agent = agent
         self.session = agent.session
-        self._hint_picker = HintPicker()  # idle-placeholder tips; see yucode/hints.py
+        self._hint_picker = HintPicker()  # 空闲占位提示的挑选器;见 yucode/hints.py
         self.input_fn = input_fn
         self.ui = UiPrinter(output_fn)
         self.status_bar = StatusBar(self.session)
@@ -312,22 +316,22 @@ Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall, Note, Ask, MCP, S
         self.model_stream_text = ""
         self.model_stream_promoted_text = ""
         self.live_status_paused = False
-        # Set to the uid this run should hand over to. `main` reads it after run() returns and
-        # builds the next CommandLoop around that session.
+        # 本次运行结束时要移交的 session uid。`main` 在 run() 返回后读取它,
+        # 并围绕该 session 构建下一个 CommandLoop。
         self.resume_request = ""
         self.background_output_lock = threading.Lock()
         self.background_output_open = True
-        self.interactive_input = input_fn is input and sys.stdin.isatty()
-        # Set by run_tui() while the full-TUI shell is active; tool_input reroutes through it so
-        # approval prompts land in the same input widget the user is already typing in.
+        self.interactive_input = input_fn is input and sys.stdin.isatty()  # 交互终端才走全 TUI;注入输入(如测试)走简单 REPL
+        # 全 TUI 外壳激活期间由 run_tui() 设置;tool_input 经由它路由,让审批提示落在
+        # 用户正在输入的同一个输入控件里。
         self.tui: TuiApp | None = None
         if self.interactive_input:
             history_path = self.session.data_path("history.txt")
             os.makedirs(os.path.dirname(history_path), exist_ok=True)
-            self.trim_input_history(history_path)
-            self.input_history = FileHistory(history_path)
+            self.trim_input_history(history_path)  # 启动时先裁剪历史文件,防其无限增长
+            self.input_history = FileHistory(history_path)  # prompt_toolkit 的历史后端
         else:
-            self.input_history = None
+            self.input_history = None  # 非交互路径没有历史记录
         self.input_completer = CommandCompleter(
             providers=lambda: tuple(sorted(self.session.config.providers)),
             models=lambda: self.session.config.provider.available_models,
@@ -338,52 +342,52 @@ Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall, Note, Ask, MCP, S
             mcp_tools=lambda server: tuple(tool.name for tool in self.session.mcp.tools.get(server, [])) if self.session.mcp else (),
             skills=lambda: tuple(skill.name for skill in self.session.skills.all()) if self.session.skills else (),
         )
-        self.agent.output_fn = self.agent_output
-        self.agent.model.on_stream = self.model_stream_output
-        self.agent.model.on_builtin_call = self.builtin_call_output
-        self.agent.on_queue_flush = self.flush_queued_to_log
-        self.agent.context.on_compaction = self.automatic_compaction_status
-        self.agent.tools.output_fn = self.tool_output
-        self.agent.tools.input_fn = self.tool_input
-        self.agent.tools.live_start = self.tool_live_start
-        self.agent.tools.live_output = self.tool_live_output
-        self.agent.tools.question_fn = self.question_interaction
+        # —— 把 agent 的各路输出/输入回调接到本循环的渲染路径上 ——
+        self.agent.output_fn = self.agent_output  # 最终答案:去重后经 agent_output 输出
+        self.agent.model.on_stream = self.model_stream_output  # 流式预览/提升
+        self.agent.model.on_builtin_call = self.builtin_call_output  # provider 侧 builtin 调用日志
+        self.agent.on_queue_flush = self.flush_queued_to_log  # 排队消息刷入回合时移进 scrollback
+        self.agent.context.on_compaction = self.automatic_compaction_status  # 自动压缩阶段提示
+        self.agent.tools.output_fn = self.tool_output  # 工具结果展示
+        self.agent.tools.input_fn = self.tool_input  # 审批输入:全 TUI 下走 TuiApp 输入框
+        self.agent.tools.live_start = self.tool_live_start  # Bash 实时预览启动
+        self.agent.tools.live_output = self.tool_live_output  # Bash 实时输出
+        self.agent.tools.question_fn = self.question_interaction  # Ask 提问
 
     def automatic_compaction_status(self, active: bool) -> None:
-        """Show automatic context compaction as a distinct phase of the running turn."""
+        """把自动上下文压缩(compaction)显示为当前回合的一个独立阶段。"""
         if self.tui is not None:
-            self.tui.set_running("compacting context" if active else "working")
+            self.tui.set_running("compacting context" if active else "working")  # 让 TUI 标题反映压缩阶段
 
     @classmethod
     def trim_input_history(cls, path: str) -> None:
-        """Bound the input history file, which prompt_toolkit only ever appends to.
+        """限制输入历史文件的大小——prompt_toolkit 只会往里追加。
 
-        Keeps the newest entries that fit in `INPUT_HISTORY_BYTES` and drops the rest. The cut is
-        made at an entry header rather than at a byte offset, so what survives is always loadable:
-        a header is written as "\n# <timestamp>\n" and content lines are "+"-prefixed, which is why
-        a user line beginning with "#" cannot be mistaken for one. The replacement is atomic, so an
-        interrupted trim cannot leave a truncated history behind, and every failure is ignored —
-        recall is a convenience and must never keep the session from starting.
+        保留能装进 `INPUT_HISTORY_BYTES` 的最新的条目,丢弃其余。裁剪总是落在条目头部
+        而不是字节偏移上,所以幸存内容永远可加载:头部写成 "\n# <timestamp>\n",内容行
+        以 "+" 开头,因此用户以 "#" 开头的行不会被误认成头部。替换是原子的,被打断的
+        裁剪不会留下截断的历史文件;所有失败都被忽略——历史回忆只是便利功能,绝不能
+        阻止会话启动。
         """
         try:
             if os.path.getsize(path) <= cls.INPUT_HISTORY_BYTES:
-                return
+                return  # 未超限就不动文件
             with open(path, "rb") as file:
-                file.seek(-cls.INPUT_HISTORY_BYTES, os.SEEK_END)
+                file.seek(-cls.INPUT_HISTORY_BYTES, os.SEEK_END)  # 只读尾部预算内的字节
                 tail = file.read()
             start = tail.find(b"\n# ")
             if start < 0:
-                return  # a single entry larger than the budget; keep it rather than cut inside it
+                return  # 单条条目比预算还大:保留它,而不是从中间切开
             temp = path + ".tmp"
             with open(temp, "wb") as file:
-                file.write(tail[start + 1 :])
-            os.replace(temp, path)
+                file.write(tail[start + 1 :])  # 从条目头部起写,确保开头是完整头部
+            os.replace(temp, path)  # 原子替换:进程被杀也不会留下半截文件
         except OSError:
-            return
+            return  # 历史裁剪失败不影响启动
 
     def flush_queued_to_log(self, texts: list[str]) -> None:
-        # Move flushed queued messages from the live activity region into terminal scrollback.
-        texts = [text for text in texts if text.strip()]
+        # 把已刷入回合的排队消息从活动区移进终端 scrollback(常规日志输出)。
+        texts = [text for text in texts if text.strip()]  # 纯空白消息无展示价值,过滤掉
         if not texts:
             return
         fragments: list[tuple[str, str]] = [("", "\n")]
@@ -392,10 +396,10 @@ Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall, Note, Ask, MCP, S
                 fragments.append(("", "\n"))
             fragments.extend([("class:prompt", UiPrinter.USER_LOG_PREFIX), (UiPrinter.user_log_style(), text), ("", "\n")])
         fragments.append(("", "\n"))
-        print_formatted_text(FormattedText(fragments), style=self.style(), end="", flush=True)
+        print_formatted_text(FormattedText(fragments), style=self.style(), end="", flush=True)  # 一次输出整块,避免逐行闪烁
 
-    # Breathing green dot shown on the divider while a model request is in flight. The label moves
-    # from working to thinking/responding as stream events arrive; the pulse remains until completion.
+    # 模型请求在途时分隔线上显示的"呼吸"绿点。随着流事件到达,标签从 working 变为
+    # thinking/responding;脉冲一直持续到请求完成。
     WAITING_PULSE_STYLES: ClassVar[tuple[str, ...]] = (
         "fg:#0a3d0a",
         "fg:#146114",
@@ -408,19 +412,19 @@ Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall, Note, Ask, MCP, S
 
     def waiting_pulse_fragments(self) -> StyleAndTextTuples:
         if self.session.state.current_model_call_started_at <= 0:
-            return []
-        # Triangular breath: 0 → 1 → 0 over WAITING_PULSE_PERIOD seconds, mapped onto the palette.
+            return []  # 没有在途请求就不显示脉冲
+        # 三角呼吸:0 → 1 → 0,周期为 WAITING_PULSE_PERIOD,映射到调色板。
         phase = (time.monotonic() % self.WAITING_PULSE_PERIOD) / self.WAITING_PULSE_PERIOD
         intensity = 1.0 - abs(2.0 * phase - 1.0)
-        idx = min(len(self.WAITING_PULSE_STYLES) - 1, int(intensity * len(self.WAITING_PULSE_STYLES)))
+        idx = min(len(self.WAITING_PULSE_STYLES) - 1, int(intensity * len(self.WAITING_PULSE_STYLES)))  # 亮度 -> 样式索引,封顶到最后一个
         return [(self.WAITING_PULSE_STYLES[idx], "● ")]
 
-    # One cell per frame. A head that advances further than its own glow between redraws stops
-    # reading as motion and starts reading as a dash blinking at scattered positions.
+    # 每帧一格。若头部在两次重绘之间前进的距离超过它自己的光晕,就不再像运动,
+    # 而像是虚线在零散位置闪烁。
     QUEUE_SWEEP_CELLS_PER_SEC: ClassVar[float] = 1.0 / TuiApp.ANIMATION_INTERVAL
-    # A comet: a soft head with a tail fading into the dim rule, by distance from the head. The ramp
-    # is finer than one shade per cell, so a head between two cells lights both partially instead of
-    # snapping onto the nearer one. The divider is only drawn while working; there is no idle look.
+    # 彗星效果:柔和的头部,尾巴按与头部的距离渐隐到暗色的分隔线里。渐变比每格一个
+    # 色阶更细,所以头部停在两格之间时两格都会部分点亮,而不是跳到更近的那格。
+    # 分隔线只在工作时绘制;空闲没有这种外观。
     GLOW_REACH: ClassVar[float] = 4.0
     GLOW_STEPS: ClassVar[int] = 12
 
@@ -428,21 +432,22 @@ Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall, Note, Ask, MCP, S
         prefix = prefix or []
         prefix_len = sum(len(fragment[1]) for fragment in prefix)
         cols = shutil.get_terminal_size((80, 20)).columns
-        width = width if width is not None else max(20, min(52, cols - 2))
+        width = width if width is not None else max(20, min(52, cols - 2))  # 宽度自适应:至少 20,至多 52
         body_len = prefix_len + len(label) + 2  # prefix + " label "
         lead = 3
         trail = max(3, width - lead - body_len)
         dash_count = lead + trail
-        # The comet head bounces over the horizontal rule only. The label stays stable and readable
-        # while the glow appears to pass through the dash track on either side.
+        # 彗星头只在水平分隔线上往返弹跳。标签保持稳定可读,光晕看起来从两侧的
+        # 虚线轨道上穿过。
         span = max(1, dash_count - 1)
         phase = time.monotonic() * self.QUEUE_SWEEP_CELLS_PER_SEC % (2 * span)
-        head = phase if phase <= span else 2 * span - phase
+        head = phase if phase <= span else 2 * span - phase  # 三角波:往返运动
 
         def dashes(offset: int, count: int) -> StyleAndTextTuples:
             fragments: StyleAndTextTuples = []
             for i in range(count):
                 step = int(abs(offset + i - head) / self.GLOW_REACH * self.GLOW_STEPS)
+                # 距头部越远越暗;超出光晕范围就退化为普通虚线格。
                 fragments.append((f"class:divider.glow{step}" if step < self.GLOW_STEPS else "class:queue.rule", "-"))
             return fragments
 
@@ -456,9 +461,10 @@ Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall, Note, Ask, MCP, S
         ]
 
     def queue_divider_fragments(self, queued: int = 0) -> StyleAndTextTuples:
+        # 分隔线标签:working/thinking/responding 随流事件切换,并显示已运行时长。
         status = self.tui.status_label if self.tui is not None and self.tui.status_label else "working"
         if status == "working":
-            retry_status = self.status_bar.retry_status()
+            retry_status = self.status_bar.retry_status()  # 重试/退避状态优先展示
             attempt_status = self.status_bar.model_attempt_status()
             with self.model_stream_lock:
                 phase = self.model_stream_kind
@@ -469,30 +475,32 @@ Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall, Note, Ask, MCP, S
         else:
             label = status
         if queued:
-            label = f"{label} [ {queued} queued ]"
+            label = f"{label} [ {queued} queued ]"  # 有排队输入时挂上计数
         return self.sweep_divider_fragments(label, prefix=self.waiting_pulse_fragments())
 
     def followup_fragments(self) -> tuple[StyleAndTextTuples, StyleAndTextTuples]:
         with self.session._queue_lock:
-            pending = list(self.session.pending_user_inputs)
+            pending = list(self.session.pending_user_inputs)  # 锁内快照,避免与主线程竞态
 
         def render(items: list[QueuedInput], marker: str, marker_style: str) -> StyleAndTextTuples:
+            # 多行输入:首行带标记,后续行缩进对齐。
             fragments: StyleAndTextTuples = []
             for item in items:
                 for index, line in enumerate(item.text.splitlines()):
                     fragments.extend([("", "\n"), (marker_style, marker if index == 0 else "  "), (UiPrinter.user_log_style(), line)])
             return fragments
 
-        sent = [item for item in pending if item.inflight]
-        queued = [item for item in pending if not item.inflight]
+        sent = [item for item in pending if item.inflight]  # 已随请求发出
+        queued = [item for item in pending if not item.inflight]  # 还在队列里
         transcript = render(sent, UiPrinter.USER_LOG_PREFIX, "class:prompt")
-        # The divider is a standing boundary for the whole turn. Only messages that have not entered
-        # a model request remain below it; sent messages render above it until the request commits them.
+        # 分隔线是整个回合的常设边界。只有还没进入任何模型请求的消息留在它下方;
+        # 已发送的消息渲染在它上方,直到请求把它们正式提交。
         waiting = self.queue_divider_fragments(len(queued))
         waiting.extend(render(queued, "+ ", UiPrinter.user_log_style()))
         return transcript, waiting
 
     def tui_activity_fragments(self) -> StyleAndTextTuples:
+        # 活动区自上而下:已发送消息 → 流式预览 → Bash 实时输出 → 分隔线(排队输入)。
         sent, waiting = self.followup_fragments()
         fragments = sent
         if fragments:
@@ -502,7 +510,7 @@ Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall, Note, Ask, MCP, S
         if stream:
             fragments.append(("", "\n"))
         with self.live_preview.lock:
-            lines = self.live_preview.frame_lines() if self.live_preview.active else []
+            lines = self.live_preview.frame_lines() if self.live_preview.active else []  # 活跃 Bash 的实时输出帧
         for line in lines:
             fragments.extend([("ansibrightblack", line), ("", "\n")])
         if lines:
@@ -512,11 +520,12 @@ Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall, Note, Ask, MCP, S
 
     def model_stream_fragments(self) -> StyleAndTextTuples:
         with self.model_stream_lock:
-            kind, text = self.model_stream_kind, self.model_stream_text
+            kind, text = self.model_stream_kind, self.model_stream_text  # 锁内读取流缓冲
         if not text:
             return []
         width = max(20, shutil.get_terminal_size((120, 20)).columns)
         label = "thinking" if kind == "reasoning" else "responding"
+        # 只保留最后 6 行,并按终端宽度裁剪,防止预览撑满屏幕。
         rows = [Text.clip_width(line.expandtabs(4), max(1, width - 4)) for line in text.replace("\r", "\n").splitlines()[-6:]]
         lines = [f"├─ {label}", *(f"│  {row}" for row in rows)]
         fragments: StyleAndTextTuples = []
@@ -525,6 +534,7 @@ Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall, Note, Ask, MCP, S
         return fragments
 
     def tui_input_hint(self) -> str:
+        # 输入框提示:运行中提示可排队/回忆;聊天模式给出空闲占位小技巧。
         if self.tui is None:
             return ""
         if self.tui.input_mode == "running":
@@ -536,14 +546,13 @@ Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall, Note, Ask, MCP, S
         return ""
 
     def _hint_context(self) -> HintContext:
-        """Project the session into the small situation the hint mechanism selects on.
+        """把 session 投影成提示机制挑选时依赖的小型"情境"。
 
-        round_count only advances at the start of the next turn, so at idle it still names the
-        round that just finished; edited_round therefore clears on its own once a later round
-        makes no edits.
-        """
+        round_count 只在下一个回合开始时推进,因此空闲时它仍然指向刚结束的那个回合;
+        这样一来,一旦后面某个回合没有任何编辑,edited_round 就会自行清空。"""
         session = self.session
         round_count = session.state.round_count
+        # diff 归属本回合(按 round 或 turn)即视为"本回合做过编辑"。
         edited = any((diff.round or diff.turn) == round_count for diff in session.turn_diffs)
         return HintContext(
             early=not session.tool_records,
@@ -554,64 +563,68 @@ Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall, Note, Ask, MCP, S
         )
 
     def editor_context(self) -> str:
-        """The agent's most recent reply, restated as read-only reference inside the external
-        editor (Ctrl-X Ctrl-E / Ctrl-G): the full-screen editor hides the terminal scrollback
-        the reply is printed into. Long replies keep only their most recent lines so the
-        editor's temp file stays small."""
+        """把 agent 最近的回复作为只读参考放进外部编辑器(Ctrl-X Ctrl-E / Ctrl-G):
+        全屏编辑器会遮住回复打印所在的终端 scrollback。长回复只保留最近的行,
+        让编辑器的临时文件保持小巧。"""
         for message in reversed(self.session.messages):
             if message.get("role") != "assistant":
-                continue
+                continue  # 从最新往回找,只看 assistant 消息
             content = message.get("content")
             if isinstance(content, str) and content.strip():
                 lines = content.strip().splitlines()
                 if len(lines) > self.EDITOR_CONTEXT_MAX_LINES:
                     drop = len(lines) - self.EDITOR_CONTEXT_MAX_LINES
-                    lines = ["# [... earlier lines of the reply omitted ...]"] + lines[drop:]
+                    lines = ["# [... earlier lines of the reply omitted ...]"] + lines[drop:]  # 超长:丢掉开头,保留最近部分并注明
                 return "\n".join(lines)
         return ""
 
     def run_queued_command(self, text: str) -> None:
-        """Dispatch a read-only slash command while an agent turn is running."""
+        """agent 回合运行期间分发一个只读斜杠命令。"""
         name = text.partition(" ")[0]
         if name not in self.QUEUE_RUN_COMMANDS:
+            # 白名单外:拒绝并提示,防止命令干扰在飞回合。
             self.emit(f"{name} is unavailable while the agent is working; press Ctrl-C to run it.")
             return
         if name == "/mcp":
             sub = text.partition(" ")[2].split()
             if sub and sub[0] != "tools":
+                # /mcp 只有纯读的子命令(tools/状态)可以在运行中执行,connect 等会改状态。
                 self.emit("Only read-only /mcp (status, tools) is available while the agent is working.")
                 return
         self.command(text)
 
     def take_pending_inputs(self) -> list[UserInput]:
-        """Remove and return queued inputs that are not currently being flushed."""
+        """取出并返回"当前未被刷入回合"的排队输入(刷入中的输入留在队列里)。"""
         with self.session._queue_lock:
+            # 只取未 inflight 的;已发出的条目保留,等请求完成后的确认流程消费。
             texts = [item.user_input() for item in self.session.pending_user_inputs if not item.inflight]
             self.session.pending_user_inputs = [item for item in self.session.pending_user_inputs if item.inflight]
         return texts
 
     def recall_pending_input(self, on_inflight: Callable[[], None]) -> str | UserInput:
-        """Move the newest queued input back to the editor, retrying if it was already claimed."""
+        """把最新一条排队输入放回编辑器(↑ 键);如果它已被请求认领,先触发重试再取回。"""
         with self.session._queue_lock:
             item = next(reversed(self.session.pending_user_inputs), None)
             if item is None:
-                return ""
+                return ""  # 队列为空:无可回忆
             self.session.pending_user_inputs.remove(item)
             was_inflight = item.inflight
             if was_inflight:
+                # 该输入已随请求发出:取回它意味着那条消息作废,后续请求不再携带;
+                # 其余排队输入也全部降级为未发送,避免顺序错乱。
                 for pending_item in self.session.pending_user_inputs:
                     pending_item.inflight = False
         if was_inflight:
-            on_inflight()
+            on_inflight()  # 通知上层重发当前模型请求(带前缀的输入已经不在了)
         self.session.images.retain(item.images)
         self.session.save_snapshot()
         return item.user_input()
 
     def run(self) -> int:
-        # Interactive terminals use the full TUI; injected/non-TTY callers use the simple REPL.
+        # 交互终端走全 TUI;注入输入/非 TTY 的调用方(含测试)走简单 REPL。
         if self.interactive_input:
             return self.run_tui()
-        self.session.settings.quick_hints = False  # the simple REPL has no hint UI; don't invite the model to offer them
+        self.session.settings.quick_hints = False  # 简单 REPL 没有提示 UI:别让模型主动给出 hints
         self.start_session()
         while True:
             try:
@@ -622,18 +635,19 @@ Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall, Note, Ask, MCP, S
                 )
                 user_input = self.read_input(initial_text=initial_input)
             except EOFError:
+                # Ctrl-D/EOF:保存会话并打印恢复提示,正常退出。
                 self.emit(TurnBox.SEPARATOR)
                 self.save_and_emit_resume()
                 return 0
             except KeyboardInterrupt:
-                continue
+                continue  # 空行打断:清掉输入框重新来
             if not user_input.strip():
-                continue
+                continue  # 空白输入:忽略
             handled, exit_now = self.command(user_input.strip())
             if exit_now:
                 return 0
             if handled:
-                continue
+                continue  # 命令已处理,继续下一条输入
             self.emit("")
             started = time.monotonic()
             malformed_tool_call = False
@@ -645,65 +659,61 @@ Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall, Note, Ask, MCP, S
                     self.emit("Cancelled")
                     continue
                 except MalformedToolCallError as error:
-                    answer = str(error)
+                    answer = str(error)  # 文本化调用超限:把错误当答案展示
                     malformed_tool_call = True
                 except YucodeError as error:
                     answer = f"Error: {error}"
             finally:
-                CodeIndex(self.session).update_pending_async()
+                CodeIndex(self.session).update_pending_async()  # 回合结束:落定待处理的索引更新
                 self.status_bar.stop()
             if self.ui.color and answer.strip():
-                self.emit()
+                self.emit()  # 颜色模式下答案前空一行
             self.ui.emit_answer(answer, rule=False)
             if footer := search_sources_footer(self.agent.turn_sources):
-                self.ui.emit_answer(footer, rule=False)
+                self.ui.emit_answer(footer, rule=False)  # 回合内的 provider 搜索来源页脚
             if not malformed_tool_call:
                 self.ui.emit_turn_end(started)
             self.session.save_snapshot()
 
     def start_session(self) -> None:
-        """Initialize output and background services shared by both command-loop frontends."""
+        """初始化两个命令循环前端共享的输出与后台服务。"""
         self.emit(f"yucode {__version__}. /help for commands.")
-        UpdateChecker(self.session).start()
+        UpdateChecker(self.session).start()  # 后台线程检查更新
         if self.session.update.newer_than(__version__):
             self.emit(f"update available: {__version__} -> {self.session.update.latest}. upgrade with `{' '.join(UpdateChecker.upgrade_command())}`.")
-        self.clean_expired_sessions_async()
-        self.render_resumed_session()
-        # Publish existing availability without scanning the working tree while the user is
-        # starting to type. The bounded freshness check already runs after each completed turn.
+        self.clean_expired_sessions_async()  # 过期会话清理放在后台,不占启动路径
+        self.render_resumed_session()  # 恢复会话时重建转录
+        # 只发布"已存在"的索引状态,不在用户开始输入时扫描工作树。
+        # 有界的索引新鲜度检查已经在每个回合结束后运行过了。
         CodeIndex(self.session).status()
-        # Discover auto_connect servers in the background so an unreachable one cannot block the
-        # prompt for the discovery timeout; the tools index picks them up as they connect.
+        # 后台发现 auto_connect 服务器:不可达的服务器不会让提示符等 discovery 超时;
+        # 连接成功后由工具索引自行发现它们。
         mcp = self.session.mcp
         if mcp is not None:
             threading.Thread(target=mcp.discover_auto, name="mcp-discover", daemon=True).start()
 
     def clean_expired_sessions_async(self) -> None:
-        """Sweep expired sessions off the startup path.
+        """把过期会话的清理移出启动路径。
 
-        The sweep stats every session file in every project directory. That is microseconds on a
-        local disk, but a home directory on a network filesystem pays a round trip per file and can
-        turn it into seconds — spent before the prompt accepts a keystroke. Nothing about a first
-        keystroke depends on retention having run, so it runs on a daemon thread like the code
-        index and MCP discovery beside it, and reports through the background channel that stays
-        quiet once this loop no longer owns the terminal.
-        """
+        清理要统计每个项目目录里的每个会话文件。本地磁盘上这只是微秒级的事,但家目录
+        挂在网络文件系统上时,每个文件都要付一次往返,可能拖成秒级——而这发生在提示符
+        接受第一次按键之前。第一次按键不依赖保留策略是否已运行,所以它和旁边的代码索引、
+        MCP 发现一样跑在 daemon 线程上,并通过后台通道汇报;一旦本循环不再拥有终端,
+        该通道就保持安静。"""
 
         def sweep() -> None:
-            with contextlib.suppress(Exception):
+            with contextlib.suppress(Exception):  # 清理失败绝不影响启动
                 removed = SessionSnapshotStore.clean_expired(self.session)
                 if removed:
-                    self.emit_background(self.expired_sessions_notice(removed))
+                    self.emit_background(self.expired_sessions_notice(removed))  # 只通过后台通道汇报
 
         threading.Thread(target=sweep, name="session-cleanup", daemon=True).start()
 
     def expired_sessions_notice(self, removed: int) -> str:
-        """Word the retention notice.
+        """组织保留策略通知的措辞。
 
-        Retention removes work the user cannot get back, so it is reported rather than done
-        silently, and naming the setting turns the notice into the one moment that knob is worth
-        knowing about.
-        """
+        保留策略删掉的是用户拿不回来的工作,所以要报告而不是静默执行;把设置项的名字写
+        进通知,让这则通知成为用户唯一值得了解该旋钮的时刻。"""
         days = self.session.settings.session_retention_days
         sessions = "session" if removed == 1 else "sessions"
         return f"removed {removed} saved {sessions} inactive for over {days} {'day' if days == 1 else 'days'} (runtime.session_retention_days)"
@@ -712,25 +722,26 @@ Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall, Note, Ask, MCP, S
         return TuiRuntime(self).run()
 
     def render_resumed_session(self) -> None:
-        # Transcript reconstruction owns historical call/result matching and ordering invariants.
+        # 转录重建自己负责历史调用/结果匹配与顺序不变式,这里只做渲染。
         if not self.session.resumed:
             return
-        self.session.resumed = False
-        # The percent is derived, not persisted, so a resumed session carries a full history with a
-        # zeroed reading. Recompute it now or the status bar reports 0% until the first turn.
+        self.session.resumed = False  # 一次性标志:只重建一次
+        # context 百分比是推导值而不是持久值,所以恢复的会话带着完整历史却读数归零。
+        # 现在重算,否则状态栏在第一个回合前一直显示 0%。
         self.agent.context.update_current_tokens(SYSTEM_PROMPT)
+        # 只渲染非内部消息(去掉快照内部元数据与 tool 结果消息,tool 结果由记录重建)。
         messages = [message for message in self.session.messages if not SessionSnapshotCodec.is_internal_message(message) and message.get("role") != "tool"]
         self.emit(f"Restored session: {self.session.uid}")
         if not messages:
             return
-        diffs = {diff.key: diff.diff for diff in self.session.turn_diffs if diff.key and diff.diff}
+        diffs = {diff.key: diff.diff for diff in self.session.turn_diffs if diff.key and diff.diff}  # key -> diff 文本,供 Edit 回放
         tool_record_index = 0
         for index, turn in enumerate(TurnBox.group(messages)):
             if index:
-                self.emit("")
+                self.emit("")  # 回合之间空一行
             for message in turn.messages:
                 tool_record_index = self.render_transcript_message(message, tool_record_index, diffs)
-        self.render_remaining_tool_records(tool_record_index, diffs)
+        self.render_remaining_tool_records(tool_record_index, diffs)  # 历史里缺工具消息的调用:用剩余记录补齐
 
     def render_transcript_message(self, message: Json, tool_record_index: int = 0, diffs: dict[str, str] | None = None) -> int:
         role = str(message.get("role") or "")
@@ -738,50 +749,51 @@ Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall, Note, Ask, MCP, S
         raw_calls = message.get("tool_calls")
         has_tool_calls = isinstance(raw_calls, list) and bool(raw_calls)
         if role == "assistant" and content:
+            # 带工具调用的 assistant 消息:正文缩进一层,为下方的工具块腾出视觉空间。
             self.ui.emit_answer(content, role=role, rule=False, indent=TurnBox.CONTENT_LEVEL if has_tool_calls else TurnBox.ROOT_LEVEL)
         if role == "assistant":
             return self.render_transcript_tool_calls(message, tool_record_index, diffs or {})
         if role == "user" and content and not ImageInputs.is_tool_observation(message):
-            # The follow-up marker is model-facing context, part of history because it was sent.
-            # The scrollback shows what the user typed, exactly as it looked when they typed it.
+            # 跟进标记是面向模型的上下文,因为发出过所以属于历史的一部分。
+            # scrollback 展示用户当时输入的样子——去掉前缀,原样呈现。
             self.ui.emit_answer(content.removeprefix(LIVE_FOLLOWUP_PREFIX.strip()).lstrip(), role=role, rule=False)
         return tool_record_index
 
     def render_transcript_tool_calls(self, message: Json, tool_record_index: int, diffs: dict[str, str]) -> int:
         raw_calls = message.get("tool_calls") or []
         if not isinstance(raw_calls, list):
-            return tool_record_index
+            return tool_record_index  # 畸形/缺失的 tool_calls 不做回放
         for raw in raw_calls:
             call = self.transcript_tool_call(raw)
             if call is None:
-                continue
+                continue  # 无法解析的调用跳过,不回放
             record, tool_record_index = self.transcript_tool_record(call, tool_record_index)
             self.emit_transcript_tool(call, record.key if record else "", diffs)
         return tool_record_index
 
     def render_remaining_tool_records(self, tool_record_index: int, diffs: dict[str, str]) -> None:
+        # 历史中没有对应工具消息的剩余记录(如被拒绝/跳过调用产生的结果)也一并渲染,
+        # 保持"一调用一结果"的转录完整性。
         for record in self.session.tool_records[tool_record_index:]:
             call = ToolCall(id="", name=record.name, args=record.args)
             self.emit_transcript_tool(call, record.key, diffs)
 
     def emit_transcript_tool(self, call: ToolCall, key: str, diffs: dict[str, str]) -> None:
-        """An Edit shows the diff it made, the way it did when the edit ran live. Live, that preview
-        comes from the approval block; here the stored diff text is the same string, so replaying it
-        needs no reconstruction."""
+        """Edit 展示它当时做的 diff,和现场运行时的方式一致。现场预览来自审批块;
+        这里存储的 diff 文本就是同一个字符串,所以回放无需任何重建。"""
         preview = diffs.get(key, "") if call.name == "Edit" else ""
         if not preview:
             self.emit(self.agent.tools.finish_display(call, key, "", failed=False))
             return
-        # The preview block carries the call line, so the result collapses to its trailing marker
-        # underneath it — the same nesting the live approval block produces.
+        # 预览块自带调用行,结果行就折叠成它下面的尾部标记——和现场审批块相同的嵌套结构。
         self.emit(self.transcript_edit_preview(call, preview))
         self.emit(self.agent.tools.finish_display(call, key, "", failed=False, d=ToolDisplay(nested_display=True)))
 
     def transcript_edit_preview(self, call: ToolCall, preview: str) -> LogBlock:
         tools = self.agent.tools
         lines = preview.rstrip().splitlines()
-        # A long replay would bury the prompt under diffs, so each one is trimmed to a readable
-        # window; `/diff` still holds the full text.
+        # 长回放会把提示符埋进一堆 diff 里,所以每个 diff 都裁剪到可读窗口;
+        # 完整文本仍在 /diff 里。
         hidden = max(0, len(lines) - self.TRANSCRIPT_DIFF_LINES)
         if hidden:
             lines = lines[: self.TRANSCRIPT_DIFF_LINES]
@@ -794,44 +806,44 @@ Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall, Note, Ask, MCP, S
     @staticmethod
     def transcript_tool_call(raw: object) -> ToolCall | None:
         if not isinstance(raw, dict):
-            return None
+            return None  # 历史快照里的畸形条目:跳过
         raw_function = raw.get("function")
         function = raw_function if isinstance(raw_function, dict) else {}
         name = str(function.get("name") or "")
         if not name:
-            return None
+            return None  # 没有名字的调用无法回放
         arguments = function.get("arguments")
         try:
-            # strict=False tolerates literal newlines in argument strings (e.g. multi-line
-            # git commit messages) that would otherwise be rejected as invalid JSON.
+            # strict=False 容忍参数串里的字面换行(例如多行 git commit message),
+            # 否则它们会被当作非法 JSON 拒绝。
             payload = json.loads(arguments, strict=False) if isinstance(arguments, str) else (arguments or {})
         except json.JSONDecodeError:
-            payload = {}
+            payload = {}  # 参数无法解析:退化为空 payload
         try:
             args = ModelClient.tool_payload(name, payload)
         except ToolError:
-            # A malformed historical call (e.g. tool args that fail validation) must not crash
-            # the resume; render it without parsed args.
+            # 历史中的畸形调用(如参数校验失败的 tool args)不能弄崩恢复流程:
+            # 不带解析参数地渲染它。
             args = [payload] if payload else []
         return ToolCall(id=str(raw.get("id") or ""), name=name, args=args)
 
     def transcript_tool_record(self, call: ToolCall, tool_record_index: int) -> tuple[ToolResultRecord | None, int]:
         tool_class = TOOL_REGISTRY.get(call.name)
         if tool_class is not None and not tool_class.STORES_RESULT:
-            return None, tool_record_index
+            return None, tool_record_index  # 不存储结果的工具没有对应记录
         records = self.session.tool_records
         while tool_record_index < len(records):
             record = records[tool_record_index]
             tool_record_index += 1
             if record.name == call.name:
-                return record, tool_record_index
+                return record, tool_record_index  # 找到同名记录(按历史顺序消费)
         return None, tool_record_index
 
     def save_and_emit_resume(self) -> None:
         uid = self.session.save_snapshot()
         if uid:
-            # The name goes in the sentence, never in the command: the line below is meant to be
-            # pasted, and only the uid is guaranteed to still mean this session tomorrow.
+            # 名字只出现在句子里,绝不放进命令:下面这行是拿来粘贴的,
+            # 而只有 uid 能保证明天仍然指向这个会话。
             name = self.session.name
             self.emit(f"Resume {name!r} with:\nyucode --resume {uid}" if name else f"Resume with:\nyucode --resume {uid}")
 
@@ -840,7 +852,7 @@ Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall, Note, Ask, MCP, S
         return Style.from_dict(
             {
                 "prompt": "ansicyan bold",
-                # The comet fades into the rule it travels over, so both come from the palette.
+                # 彗星在它滑过的分隔线上渐隐,所以两者都取自调色板。
                 "queue.rule": rule,
                 **{f"divider.glow{step}": color for step, color in enumerate(Theme.ramp("divider.glow", "divider.rule", self.GLOW_STEPS))},
                 "queue.hint": "ansibrightblack",
@@ -883,115 +895,114 @@ Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall, Note, Ask, MCP, S
         *,
         initial_text: str = "",
     ) -> str:
-        """Read from the injected/non-TTY input path; interactive terminals use TuiApp."""
+        """从注入输入/非 TTY 路径读取;交互终端使用 TuiApp。"""
         return initial_text or self.input_fn(prompt_text)
 
     def emit(self, text: str | LogBlock = "") -> None:
         self.ui.emit(text)
 
     def emit_background(self, text: str) -> None:
-        """Emit from a daemon worker only while this loop still owns terminal output."""
+        """仅当本循环仍拥有终端输出时才从 daemon worker 发出文本。"""
         with self.background_output_lock:
             if self.background_output_open:
                 self.emit(text)
 
     def close_background_output(self, final_output: Callable[[], None] | None = None) -> None:
         with self.background_output_lock:
-            self.background_output_open = False
+            self.background_output_open = False  # 之后 emit_background 一律静默
             if final_output is not None:
-                final_output()
+                final_output()  # 关门前最后输出(如退出前的摘要)
 
     def with_status_paused(self, action):
-        # Only quiet the standalone status-bar thread used by the simple/non-TTY path. The full TUI
-        # renders status and output together, so it never needs this terminal-level coordination.
+        # 只暂停简单/非 TTY 路径使用的独立状态栏线程。全 TUI 把状态和输出一起渲染,
+        # 永远不需要这种终端级协调。
         was_running = self.status_bar.is_running()
         if was_running:
-            self.status_bar.stop()
+            self.status_bar.stop()  # 输出期间停掉状态栏,避免刷屏互相覆盖
         try:
             return action()
         finally:
             if was_running:
-                self.status_bar.start(reset=False)
+                self.status_bar.start(reset=False)  # 恢复状态栏,但不重置开始时间
 
     def tool_output(self, text: str | LogBlock = "") -> None:
         def output() -> None:
+            # 颜色模式下,单条工具输出前空一行保持视觉分隔。
             if self.ui.color and (isinstance(text, str) or (text.items and isinstance(text.items[0], LogLine))):
                 self.emit()
             self.emit(text)
 
-        self.with_status_paused(output)
+        self.with_status_paused(output)  # 输出期间暂停独立状态栏,避免互相覆盖
 
     def builtin_call_output(self, label: str, detail: str) -> None:
-        """Log a tool the provider ran for itself, so the transcript shows it like any other call.
+        """记录 provider 替自己执行的工具,让转录像展示其他调用一样展示它。
 
-        A provider-side search leaves no local tool call to log, and the running status label is gone
-        the moment the turn ends. Without this line the transcript would credit the model with
-        knowledge it went and looked up."""
+        provider 侧搜索不会留下可记录的本地工具调用,而且运行状态标签在回合结束的瞬间
+        就消失了。没有这行的话,转录会把模型"自己去查过"的知识记成它本来就有的。"""
         self.tool_output(LogBlock([LogLine(label, Text.clip_width(detail, 120), LogRole.TOOL, LogEdge.BRANCH)]))
 
     @staticmethod
     def unpromoted_text(text: str, promoted: str) -> str:
-        """What is left to publish after an early promotion already wrote `promoted` to scrollback.
+        """早前"提升"(promotion)已经把 `promoted` 写进 scrollback 后,还剩下什么要发布。
 
-        A local tool call ends the response, so its promoted text is the whole of it. A provider-side
-        tool runs inside the response and the model keeps writing afterwards, so there the promotion
-        is only a prefix: re-emitting the whole text would repeat it, and skipping it would drop
-        everything the model wrote after the search."""
+        本地工具调用会结束响应,所以被提升的文本就是它的全部。而 provider 侧工具在响应
+        内部运行,模型之后还会继续写,所以那里的提升只是前缀:整个重发会重复,整个跳过
+        又会丢掉搜索之后模型写的所有内容。"""
         answer = text.strip()
         if promoted and answer.startswith(promoted):
-            return answer[len(promoted) :].strip()
-        return answer
+            return answer[len(promoted) :].strip()  # 去掉已提升的前缀,只发剩余部分
+        return answer  # 文本与提升内容不符(被更新过):全部重发
 
     def agent_output(self, text: str = "") -> None:
-        # An early promotion is presentation-only: Agent still publishes the same semantic text
-        # after ModelClient returns. Consume the one-shot marker instead of printing it twice.
+        # 早期提升只是展示层面的:Agent 在 ModelClient 返回后仍会发布同一段语义文本。
+        # 这里消费掉一次性标记,避免打印两遍。
         with self.model_stream_lock:
             promoted = self.model_stream_promoted_text
-            self.model_stream_promoted_text = ""
+            self.model_stream_promoted_text = ""  # 一次性消费
         if promoted:
             remaining = self.unpromoted_text(text, promoted)
             if not remaining:
-                return
+                return  # 全部内容都已提升过:不再打印
             text = remaining
         self.with_status_paused(lambda: self.emit_agent_output(text))
 
     def model_stream_output(self, kind: str, text: str) -> None:
-        """Update the dim preview or permanently promote a protocol-complete response.
+        """更新暗色预览,或把协议完整的响应永久"提升"到 scrollback。
 
-        `output_done` is internal and emitted only when ModelClient has seen both completed text and
-        a tool call. The scrollback write is synchronous so prompt-toolkit cannot batch it with the
-        immediately following ToolRunner output and leave the `responding` preview covering it.
+        `output_done` 是内部事件,只在 ModelClient 同时看到完整文本与工具调用时发出。
+        scrollback 写入是同步的,这样 prompt-toolkit 不会把它和紧随其后的 ToolRunner 输出
+        批量渲染,从而让 `responding` 预览遮住它。
         """
         promote = ""
         tui = self.tui
         if kind == "output_done" and self.session.has_inflight_user_inputs():
-            # A request that carried live follow-ups logs them to scrollback only once it returns,
-            # so promoting here would place the response above the message it answers. Leave the
-            # preview standing and let the ordinary post-request output keep the transcript ordered.
+            # 携带实时跟进消息的请求只在返回后把消息记入 scrollback,所以在这里提升会把
+            # 响应放到它所回答的消息上方。让预览保持原样,由常规的请求后输出维持转录顺序。
             return
         with self.model_stream_lock:
             if kind == "output_done":
                 promote = text.strip()
-                self.model_stream_kind = self.model_stream_text = ""
+                self.model_stream_kind = self.model_stream_text = ""  # 清除预览缓冲
                 if promote and tui is not None:
-                    self.model_stream_promoted_text = promote
+                    self.model_stream_promoted_text = promote  # 记下已提升内容,供 agent_output 去重
             elif not kind:
-                self.model_stream_kind = self.model_stream_text = ""
+                self.model_stream_kind = self.model_stream_text = ""  # 流结束:清空预览
             elif not text:
-                self.model_stream_kind, self.model_stream_text = kind, ""
+                self.model_stream_kind, self.model_stream_text = kind, ""  # 只改阶段、不改文本
             elif text:
                 if kind != self.model_stream_kind:
-                    self.model_stream_kind, self.model_stream_text = kind, ""
-                self.model_stream_text = (self.model_stream_text + text)[-8000:]
+                    self.model_stream_kind, self.model_stream_text = kind, ""  # 阶段切换:丢弃旧文本
+                self.model_stream_text = (self.model_stream_text + text)[-8000:]  # 缓冲封顶 8000 字符,防内存无限增长
         if tui is not None:
-            tui.invalidate_frame()
+            tui.invalidate_frame()  # 通知 TUI 重绘活动区
             if promote:
+                # 提升为正式输出:同步写入 scrollback,保证顺序。
                 self.with_status_paused(lambda: tui.write_to_scrollback(lambda: self.emit_agent_output(promote)))
 
     def tool_input(self, prompt: str = "") -> str:
-        # When the TUI is running, route agent approvals through TuiApp's
-        # own input widget so the user answers inline in the persistent shell instead of a
-        # separate pt Application (which would fail because pt does not nest).
+        # TUI 运行时,把 agent 的审批路由到 TuiApp 自己的输入控件,让用户就在常驻 shell
+        # 里内联回答,而不是另开一个 prompt_toolkit Application(那会失败,因为 pt
+        # 不能嵌套)。
         if self.tui is not None:
             return self.tui.request_input(prompt)
 
@@ -999,19 +1010,19 @@ Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall, Note, Ask, MCP, S
 
     def emit_agent_output(self, text: str) -> None:
         if self.ui.color and text.strip():
-            self.emit()
-        self.ui.emit_answer(text, rule=False, indent=TurnBox.CONTENT_LEVEL)
+            self.emit()  # 颜色模式下,答案前空一行
+        self.ui.emit_answer(text, rule=False, indent=TurnBox.CONTENT_LEVEL)  # 内容缩进一级,与工具块对齐
 
     def _begin_cli_preview(self) -> None:
-        """Pause the status bar if running and start the CLI Bash live-preview line."""
-        self.live_status_paused = self.status_bar.is_running()
+        """暂停(若在运行的)状态栏,并启动 CLI Bash 实时预览行。"""
+        self.live_status_paused = self.status_bar.is_running()  # 记住是否需要恢复
         if self.live_status_paused:
             self.status_bar.stop()
         self.live_preview.start()
 
     def tool_live_start(self) -> None:
         if not self.ui.color:
-            return
+            return  # 无颜色模式:没有实时预览
         if self.tui is not None:
             with self.live_preview.lock:
                 self.live_preview.active = True
@@ -1028,52 +1039,52 @@ Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall, Note, Ask, MCP, S
             with self.live_preview.lock:
                 if text:
                     self.live_preview.active = True
-                    self.live_preview.text = (self.live_preview.text + text)[-self.live_preview.MAX_CHARS :]
+                    self.live_preview.text = (self.live_preview.text + text)[-self.live_preview.MAX_CHARS :]  # 预览文本封顶,防内存无限增长
                 else:
-                    self.live_preview.active = False
+                    self.live_preview.active = False  # 空文本 = 流结束
                     self.live_preview.text = ""
             self.tui.invalidate()
             return
         if text:
             if not self.live_preview.active:
-                self._begin_cli_preview()
+                self._begin_cli_preview()  # 首块输出才启动预览
             self.live_preview.update(text)
             return
         if self.live_preview.active:
-            self.live_preview.finish()
+            self.live_preview.finish()  # 流结束:定格最后一帧
         if self.live_status_paused:
-            self.status_bar.start(reset=False)
+            self.status_bar.start(reset=False)  # 恢复状态栏
             self.live_status_paused = False
 
     def command(self, text: str) -> tuple[bool, bool]:
         if text in {"/exit", "/quit", "exit", "quit"}:
             self.save_and_emit_resume()
-            return True, True
+            return True, True  # (已处理, 退出)
         if not text.startswith("/"):
-            return False, False
+            return False, False  # 不是命令:由调用方当普通输入跑回合
         name, _, args = text.partition(" ")
         method_name = self.COMMAND_HANDLERS.get(name)
         handler = getattr(self, method_name, None) if method_name else None
         output = handler(args.strip()) if handler else f"Unknown command: {name}"
-        # A None result means the handler already rendered its own UI (e.g. /diff's viewer).
+        # None 结果表示 handler 已经渲染了自己的 UI(例如 /diff 的查看器)。
         if output is not None:
             if name == "/status":
                 self.ui.emit_answer(output, rule=False)
             else:
                 (self.ui.emit_answer if name in {"/help", "/ps", "/mcp", "/skills", "/diff"} else self.emit)(output)
-        # A handler that asked to switch sessions ends this run the way /exit does; `main` starts
-        # the next one on the session it named.
+        # 请求切换会话的 handler 会像 /exit 一样结束本次运行;`main` 会围绕它
+        # 指定的 session 启动下一个。
         return True, bool(self.resume_request)
 
     def resend_command(self, _args: str) -> str | None:
-        """Resend the in-flight model request. Available only in the running queue-input region:
-        typed while a turn works, it re-requests the current model call (same path as on_retry)."""
+        """重发在途的模型请求。只在运行中的排队输入区可用:回合进行中输入它,
+        会重新请求当前的模型调用(与 on_retry 同一条路径)。"""
         if self.tui is None or self.tui.input_mode != "running":
-            return "/resend re-requests the current model request — type it while a turn is working."
+            return "/resend re-requests the current model request — type it while a turn is working."  # 非运行态:提示用法
         if self.session.state.current_model_call_started_at <= 0:
-            return "Nothing to resend right now; /resend works while the model is generating."
+            return "Nothing to resend right now; /resend works while the model is generating."  # 没有在途请求
         self.tui.on_retry()
-        return None
+        return None  # None = 不输出文本,由 TUI 自己处理
 
     def mcp_command(self, args: str) -> str | None:
         mcp = self.session.mcp
@@ -1082,6 +1093,7 @@ Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall, Note, Ask, MCP, S
 
         parts = args.split()
         if not parts:
+            # 无子命令:空闲 TUI 打开交互式选择器;否则输出文本状态。
             if self.tui is not None and self.tui.input_mode != "running":
                 return self.mcp_manager()
             return mcp.render_server_status()
@@ -1093,7 +1105,7 @@ Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall, Note, Ask, MCP, S
             return f"Unknown /mcp subcommand: {sub}. {self.MCP_HELP}"
         min_args, max_args, usage = command
         if not min_args <= len(rest) <= max_args:
-            return usage
+            return usage  # 参数个数不合法:给出用法
 
         if sub == "connect":
             return mcp.connect_servers(rest, interactive=self.interactive_input, notify=self.emit)
@@ -1101,9 +1113,10 @@ Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall, Note, Ask, MCP, S
             return mcp.disconnect_server(rest[0])
         if sub == "tools":
             return mcp.render_tool_listing(rest[0] if rest else None)
-        raise AssertionError("unreachable MCP subcommand")
+        raise AssertionError("unreachable MCP subcommand")  # 所有子命令都已处理,理论不可达
 
     def mcp_manager(self) -> None:
+        # 交互式 MCP 服务器管理器:选择器里每行一个服务器,回车切换连接状态。
         mcp = self.session.mcp
         tui = self.tui
         if mcp is None or tui is None:
@@ -1113,10 +1126,12 @@ Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall, Note, Ask, MCP, S
             self.ui.emit_answer(mcp.render_server_status())
             return
 
+        # transitions: 正在进行的切换(name -> 目标动作);errors: 上次切换的失败信息;
+        # modal_open 跟踪模态窗是否还开着,决定切换结果走 UI 通道还是后台通道。
         state = ChoiceViewState(tuple(config.name for config in configs), {}, set())
         transitions: dict[str, str] = {}
         errors: dict[str, str] = {}
-        state_lock = threading.Lock()
+        state_lock = threading.Lock()  # 后台切换线程与渲染线程共享状态,需要加锁
         modal_open = threading.Event()
         modal_open.set()
 
@@ -1126,6 +1141,7 @@ Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall, Note, Ask, MCP, S
                 failed = dict(errors)
             server_rows = []
             for config in configs:
+                # 状态优先级:切换中 > 出错 > 已知问题 > 已连接 > 未连接。
                 if transition := changing.get(config.name):
                     status = mcp.STATUS_MARKER + " " + transition
                 elif config.name in failed:
@@ -1141,9 +1157,11 @@ Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall, Note, Ask, MCP, S
                 server_rows.append((config.name, status, mode, count))
             name_width = max(len(name) for name, *_rest in server_rows)
             status_width = max(len(mcp.STATUS_MARKER + " disconnecting"), *(len(status) for _name, status, _mode, _count in server_rows))
+            # 按列宽对齐排版,保证选择器里各行整齐。
             return {name: f"{name:<{name_width}}  {status:<{status_width}}  {mode:<6}  {count:>3} tools" for name, status, mode, count in server_rows}
 
         def preview(name: str) -> str:
+            # 预览:优先显示最近一次失败,其次显示服务器的已知问题说明。
             with state_lock:
                 if message := errors.get(name):
                     return message
@@ -1152,7 +1170,7 @@ Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall, Note, Ask, MCP, S
             return ""
 
         def fragments() -> StyleAndTextTuples:
-            state.labels = server_labels()
+            state.labels = server_labels()  # 每帧重算标签:切换状态实时反映
             return state.fragments("MCP servers · Enter toggles connection", preview)
 
         def toggle(name: str, connect: bool) -> None:
@@ -1161,38 +1179,39 @@ Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall, Note, Ask, MCP, S
                     result = mcp.connect_server(name, interactive=True, notify=self.emit)
                 else:
                     result = mcp.disconnect_server(name)
-            except Exception as error:  # noqa: BLE001 - keep background MCP failures visible in the selector.
+            except Exception as error:  # noqa: BLE001 - 后台 MCP 失败也要能在选择器里看到
                 result = f"MCP server error: {name}: {error}"
 
             succeeded = mcp.connected(name) == connect
             with state_lock:
-                transitions.pop(name, None)
+                transitions.pop(name, None)  # 切换结束,移出"切换中"标记
                 if succeeded:
-                    errors.pop(name, None)
+                    errors.pop(name, None)  # 成功:清掉历史错误
                 else:
-                    errors[name] = result
+                    errors[name] = result  # 失败:记录原因供 preview 显示
             if modal_open.is_set():
-                tui.invalidate()
+                tui.invalidate()  # 模态窗还开着:刷新选择器
             else:
-                self.emit_background(result)
+                self.emit_background(result)  # 否则走后台通道(如失败发生在本循环退出后)
 
         def handle_key(key: str, data: str = "") -> Any:
             result = state.handle_key(key, data)
             if not isinstance(result, str):
-                return result
+                return result  # 导航类按键:交给选择器状态机
             with state_lock:
                 if result in transitions:
-                    return TUI_MODAL_PENDING
+                    return TUI_MODAL_PENDING  # 该服务器正在切换:忽略重复按键
                 connect = not mcp.connected(result)
                 errors.pop(result, None)
                 transitions[result] = "connecting" if connect else "disconnecting"
+            # 连接/断开放到后台线程,避免阻塞 UI 线程;返回 PENDING 保持模态窗。
             threading.Thread(target=toggle, args=(result, connect), name="mcp-toggle-" + result, daemon=True).start()
             return TUI_MODAL_PENDING
 
         try:
             tui.show_modal(fragments, handle_key)
         finally:
-            modal_open.clear()
+            modal_open.clear()  # 模态窗关闭后,后台切换结果改走 emit_background
 
     def select_choice(
         self,
@@ -1205,15 +1224,15 @@ Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall, Note, Ask, MCP, S
     ) -> str | object | None:
         labels = labels or {}
         if not choices or not self.interactive_input:
-            return None
+            return None  # 无可选项或非交互路径:不做选择器,由调用方走默认
         enabled = tuple(choice for choice in choices if choice not in disabled)
         if len(enabled) == 1:
-            return enabled[0]
+            return enabled[0]  # 只有一个可选:直接选中,跳过选择器
         try:
             return self.choice_application(title, choices, labels, current, set(disabled))
         except (EOFError, KeyboardInterrupt):
             self.emit("Cancelled")
-            return None
+            return None  # 用户中断选择:视同放弃
 
     def choice_application(
         self,
@@ -1228,43 +1247,44 @@ Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall, Note, Ask, MCP, S
     ) -> str | object | None:
         if free_text and self.interactive_input:
             choices = (*choices, ChoiceViewState.FREE_TEXT)
-            labels = {**labels, ChoiceViewState.FREE_TEXT: "Type freely..."}
+            labels = {**labels, ChoiceViewState.FREE_TEXT: "Type freely..."}  # 追加"自由输入"选项
         state = ChoiceViewState(choices, labels, disabled)
         options = state.enabled()
-        state.selected = options.index(current) if current in options else 0
+        state.selected = options.index(current) if current in options else 0  # 默认选中当前值(若存在)
         if self.tui is None:
             return None
         result = self.tui.show_modal(lambda: state.fragments(title, preview_fn), state.handle_key)
         if isinstance(result, KeyboardInterrupt):
-            raise result
+            raise result  # 选择器内中断:上抛给 select_choice 统一处理
         return result
 
     def question_application(self, spec: AskSpec, position: str = "") -> str:
-        """Ask via the shared choice selector, with dynamic previews and a free-text fallback."""
+        """通过共享的选择器提问,支持动态预览和自由输入兜底。"""
         choices = spec.choices
-        # Prefix the position (e.g. "(1/3) ...") into the question text so it renders as plain
-        # markdown — no separate styled line, hence no ANSI escapes to mangle.
+        # 把位置前缀(如 "(1/3) ...")拼进问题文本,按普通 markdown 渲染——
+        # 不需要单独的样式行,也就没有 ANSI 转义会被弄乱的问题。
         prompt = f"({position}) {spec.question}" if position else spec.question
         if not choices:
+            # 无选项:直接输入框(先渲染问题文本)。
             return self.tui.request_input("\n" + prompt) if self.tui is not None else self.read_input("\n" + prompt)
         if not self.interactive_input:
-            return self.read_input("\n" + prompt)
+            return self.read_input("\n" + prompt)  # 非交互:纯文本提问
 
-        # Blank separator line before each question so multi-question prompts don't run together.
+        # 每个问题前空一行,多问题提示不会挤在一起。
         if self.ui.color:
             self.emit("")
             self.ui.emit_markdown(prompt)
         else:
             self.emit("\n" + prompt + "\n")
 
-        # An optional recommended choice is pre-selected (via current) and marked (via labels),
-        # reusing the selector's existing machinery.
+        # 可选的推荐项通过 current 预选中、通过 labels 标记出来,
+        # 直接复用选择器已有的机制。
         labels, current = {}, ""
         if spec.recommended is not None and 0 <= spec.recommended < len(choices):
             current = choices[spec.recommended]
             labels = {current: current + " (recommended)"}
         previews = spec.previews
-        preview_map = {c: previews[i] for i, c in enumerate(choices) if previews and i < len(previews) and previews[i]}
+        preview_map = {c: previews[i] for i, c in enumerate(choices) if previews and i < len(previews) and previews[i]}  # 选项 -> 预览文本
         result = self.choice_application(
             "Select:",
             tuple(choices),
@@ -1275,30 +1295,30 @@ Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall, Note, Ask, MCP, S
             free_text=True,
         )
         if result is SELECTION_FREE_TEXT:
-            # The question was already rendered before the choice selector; do not repeat a long
-            # raw prompt when the user switches to free text.
+            # 问题已经渲染过了;切到自由输入时不要再重复一遍冗长的原始提示。
             self.emit("")
             return self.tui.request_input("> ") if self.tui is not None else self.read_input("> ")
         if isinstance(result, str):
             return result
-        return DISMISSED  # SELECTION_BACK (Esc) — user declined to answer
+        return DISMISSED  # SELECTION_BACK (Esc)——用户拒绝作答
 
     def question_interaction(self, spec: AskSpec, position: str = "") -> str:
-        """Entry point for Ask; the final tool log renders the returned answer."""
+        """Ask 工具的入口;返回的答案由最终的 tool 日志渲染。"""
         return self.question_application(spec, position)
 
     def select_reasoning(self) -> str | object | None:
+        # 当前值带上 "(current)" 标签,让选择器一眼看出现状。
         current = self.session.config.provider.reasoning
         labels = {"off": "off - disable reasoning"}
         labels[current] = labels.get(current, current) + " (current)"
         return self.select_choice("Reasoning effort", REASONING_CHOICES, labels=labels, current=current)
 
     def select_api(self, model: str) -> str | object | None:
-        # An endpoint that lists several model families rarely serves them all over one protocol, and
-        # a /models listing does not say which. Confirm the wire alongside the model that needs it.
+        # 一个列出多个模型家族的端点很少只用一种协议就能全部服务,/models 列表也不说明
+        # 这一点。所以选择模型时顺带确认 wire 协议。
         provider = self.session.config.provider
         current = provider.api
-        inferred = replace(provider, api="auto", model=model).resolve().api
+        inferred = replace(provider, api="auto", model=model).resolve().api  # 预演 auto 解析结果,写进标签
         labels = {"auto": f"auto - infer from the endpoint URL and model ({inferred})"}
         labels[current] = labels.get(current, current) + " (current)"
         return self.select_choice("Request API", PROVIDER_API_CHOICES, labels=labels, current=current)
@@ -1306,15 +1326,15 @@ Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall, Note, Ask, MCP, S
     def help(self, args: str) -> str:
         text = self.HELP.rstrip()
         if self.ui.color:
-            return text
-        text = text.replace("`", "")
-        text = self.HELP_HEADING_RE.sub(r"\1:", text)
-        return self.HELP_ENTRY_RE.sub(r"  \1  ", text)
+            return text  # 颜色模式:原样输出 markdown
+        text = text.replace("`", "")  # 纯文本模式:去掉反引号
+        text = self.HELP_HEADING_RE.sub(r"\1:", text)  # "### 命令" -> "命令:"
+        return self.HELP_ENTRY_RE.sub(r"  \1  ", text)  # 条目重新缩进
 
     def status(self, args: str) -> str:
         def progress_bar(value: int, total: int, width: int = 14) -> str:
-            ratio = min(1.0, max(0.0, value / total)) if total else 0.0
-            eighths = int(ratio * width * 8 + 0.5)
+            ratio = min(1.0, max(0.0, value / total)) if total else 0.0  # 封顶 100%;total 为 0 时按 0 处理
+            eighths = int(ratio * width * 8 + 0.5)  # 宽度×8 细分,支持半格字符
             full, partial = divmod(eighths, 8)
             partials = "▏▎▍▌▋▊▉"
             return "[" + "█" * full + (partials[partial - 1] if partial else "") + "░" * (width - full - bool(partial)) + "]"
@@ -1329,14 +1349,14 @@ Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall, Note, Ask, MCP, S
         usage = self.session.usage
         provider = self.session.config.provider
         resolved = provider.resolve()
-        context_tokens = self.agent.context.update_current_tokens(SYSTEM_PROMPT)
+        context_tokens = self.agent.context.update_current_tokens(SYSTEM_PROMPT)  # 未发送过请求时的估算值
         context_budget = self.agent.context.request_token_budget()
         if usage.last_prompt_tokens and usage.last_prompt_budget:
-            # Display the provider-reported tokens and the budget of the last request; the estimate
-            # (state.context_percent) stays the fallback before any request exists.
+            # 展示 provider 上报的 token 数与上一次请求的预算;估算值
+            # (state.context_percent)在没有任何请求之前作为兜底。
             context_tokens = usage.last_prompt_tokens
             context_budget = usage.last_prompt_budget
-            context_percent = min(100, context_tokens * 100 // context_budget)
+            context_percent = min(100, context_tokens * 100 // context_budget)  # 整数百分比,封顶 100
         else:
             context_percent = self.session.state.context_percent
         index = CodeIndex(self.session)
@@ -1345,12 +1365,12 @@ Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall, Note, Ask, MCP, S
         if self.session.state.code_index_refreshing:
             index_status, index_message = self.session.state.code_index_notice or "syncing", ""
         elif self.session.state.code_index_error:
-            index_status, index_message = "error", self.session.state.code_index_error
+            index_status, index_message = "error", self.session.state.code_index_error  # 后台同步失败:显示错误
         if index_status in {"missing", "unavailable", "error"} and "run /index" not in index_message:
-            index_message = (index_message + "; " if index_message else "") + "run /index"
+            index_message = (index_message + "; " if index_message else "") + "run /index"  # 不可用状态附上修复提示
         elif index_status == "stale" and "run /index" not in index_message:
             index_message = (index_message + "; " if index_message else "") + "run /index or wait for auto update"
-        cache_ratio = (usage.cached_prompt_tokens * 100 / usage.prompt_tokens) if usage.prompt_tokens else 0
+        cache_ratio = (usage.cached_prompt_tokens * 100 / usage.prompt_tokens) if usage.prompt_tokens else 0  # prompt cache 命中率
         last_cache_ratio = (usage.last_cached_prompt_tokens * 100 / usage.last_prompt_tokens) if usage.last_prompt_tokens else 0
         connected_mcp = sum(self.session.mcp.connected(config.name) for config in self.session.mcp.parse_configs()) if self.session.mcp else 0
         activity: list[tuple[str, int | str]] = [
@@ -1409,6 +1429,7 @@ Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall, Note, Ask, MCP, S
         )
 
     def skills_command(self, args: str) -> str:
+        # 列出已安装 skills 及来源;SKILL.md 位于项目级或用户级 .yucode/skills/ 下。
         library = self.session.skills
         skills = library.all() if library else []
         if not skills:
@@ -1425,13 +1446,13 @@ Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall, Note, Ask, MCP, S
         running = self.session.running_jobs()
         if not running:
             total = len(self.session.jobs)
-            return f"No active jobs ({total} total)."
+            return f"No active jobs ({total} total)."  # 无活跃任务时顺带说明总数
         rows = [(job.id, job.status, f"{job.elapsed():.1f}s", job.command[:80]) for job in running]
         table = markdown_table(["id", "status", "elapsed", "command"], rows)
         return f"### Active jobs · {len(running)}\n\n{table}"
 
     def bash_output_viewer(self) -> None:
-        """Browse recent completed Bash previews without copying them into scrollback."""
+        """浏览最近完成的 Bash 输出预览,而不把它们复制进 scrollback。"""
         if self.tui is None:
             return
         records = []
@@ -1440,9 +1461,9 @@ Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall, Note, Ask, MCP, S
                 continue
             preview = self.agent.tools.bash_result_preview(record.output)
             if preview:
-                records.append((record, preview))
+                records.append((record, preview))  # 只收有预览可看的记录
             if len(records) == 10:
-                break
+                break  # 最多 10 条,避免列表过长
         if not records:
             return
         width = max(20, shutil.get_terminal_size((120, 20)).columns - 12)
@@ -1478,16 +1499,16 @@ Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall, Note, Ask, MCP, S
         def handle_key(key: str, data: str) -> Any:
             nonlocal opened
             if key in {"c-o", "q"}:
-                return None
+                return None  # 关闭查看器
             if opened is not None:
                 if key in {"escape", "left", "h"}:
-                    opened = None
-                return TUI_MODAL_PENDING
+                    opened = None  # 从详情返回列表
+                return TUI_MODAL_PENDING  # 详情态按键继续留在模态窗
             result = state.handle_key(key, data)
             if result is SELECTION_BACK:
-                return None
+                return None  # Esc:退出查看器
             if isinstance(result, str):
-                opened = result
+                opened = result  # 选中某条:打开详情
             return TUI_MODAL_PENDING
 
         self.tui.show_modal(fragments, handle_key)
@@ -1496,7 +1517,7 @@ Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall, Note, Ask, MCP, S
         if args.strip():
             return "Usage: /diff"
         if self.interactive_input and self.ui.color and (self.tui is None or self.tui.alternate_screen_available()):
-            self.diff_viewer()
+            self.diff_viewer()  # 交互终端:全屏交互查看器
             return None
         latest = self.agent.session.latest_round_diff_sections()
         session = self.agent.session.session_diff_sections()
@@ -1513,21 +1534,21 @@ Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall, Note, Ask, MCP, S
             lines.append("### " + title)
             for _status, path, diff in sections:
                 lines.append(f"#### {path}")
-                bounded, truncated = CommandLoop.bounded_diff(diff)
+                bounded, truncated = CommandLoop.bounded_diff(diff)  # 超大 diff 截断
                 lines.append(f"```diff\n{bounded}\n```")
                 if truncated:
                     lines.append("\n*Diff truncated. Full edit output is stored in the session.*")
         return "\n".join(lines)
 
     def diff_viewer(self) -> None:
-        """Interactive diff viewer. First shows a file list; open a file to see its diff.
+        """交互式 diff 查看器。先显示文件列表;打开某个文件查看它的 diff。
 
-        List mode: ↑/↓ or j/k move, h/l or ←/→ switches tabs, Enter opens the selected file,
-        r refreshes, q/Esc closes.
-        Diff mode: ↑/↓ scroll one line, Ctrl-U/Ctrl-D half a page, PgUp/PgDn a page,
-        Esc/← returns to list, r refreshes, q closes.
+        列表模式:↑/↓ 或 j/k 移动,h/l 或 ←/→ 切换标签,Enter 打开所选文件,
+        r 刷新,q/Esc 关闭。
+        diff 模式:↑/↓ 逐行滚动,Ctrl-U/Ctrl-D 半页,PgUp/PgDn 整页,
+        Esc/← 返回列表,r 刷新,q 关闭。
         """
-        state = DiffViewState(TabbedViewState(("Latest", "Session")))
+        state = DiffViewState(TabbedViewState(("Latest", "Session")))  # 两个标签:本轮 vs 整个会话
 
         def build_model() -> list[list[tuple[str, str, str]]]:
             latest = self.agent.session.latest_round_diff_sections()
@@ -1536,7 +1557,7 @@ Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall, Note, Ask, MCP, S
         model = build_model()
 
         def viewport() -> int:
-            return max(3, shutil.get_terminal_size().lines - 7)
+            return max(3, shutil.get_terminal_size().lines - 7)  # 减去头部/提示占用的行数
 
         def active_sections() -> list[tuple[str, str, str]]:
             return model[state.view.tab]
@@ -1544,18 +1565,18 @@ Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall, Note, Ask, MCP, S
         def list_fragments(parts: StyleAndTextTuples, sections: list[tuple[str, str, str]]) -> None:
             parts.append(("", "\n"))
             counts = [CommandLoop.diff_counts(diff) for _status, _path, diff in sections]
-            added_width = max(len(str(added)) for added, _removed in counts)
+            added_width = max(len(str(added)) for added, _removed in counts)  # 按列宽对齐
             removed_width = max(len(str(removed)) for _added, removed in counts)
             for index, ((_status, path, _diff), (added, removed)) in enumerate(zip(sections, counts)):
                 selected = index == state.file
-                marker = "> " if selected else "  "
+                marker = "> " if selected else "  "  # 选中行打标记
                 style = "ansicyan" if selected else "class:choice.disabled"
                 parts.extend(
                     [
                         (style, marker),
-                        ("ansigreen", f"+{added:>{added_width}}"),
+                        ("ansigreen", f"+{added:>{added_width}}"),  # 新增数绿色
                         ("", " "),
-                        ("ansired", f"-{removed:>{removed_width}}"),
+                        ("ansired", f"-{removed:>{removed_width}}"),  # 删除数红色
                         (style, f" {path}\n"),
                     ]
                 )
@@ -1601,13 +1622,14 @@ Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall, Note, Ask, MCP, S
             nonlocal model
             result = state.handle_key(key, len(active_sections()), viewport())
             if result is DiffViewState.REFRESH:
-                model = build_model()
+                model = build_model()  # r 键:重建模型数据
                 return TUI_MODAL_PENDING
             return result
 
         self.tui.show_modal(fragments, modal_key, exclusive=True)
 
     def config(self, args: str) -> str:
+        # 展示全部配置键值;builtin_tools 按"解析后的实际状态"呈现(可能因 wire 协议无效)。
         provider = self.session.config.provider
         resolved = provider.resolve()
         configured_builtin_tools = ", ".join(str(entry.get("type") or "?") for entry in provider.builtin_tools) or "(off)"
@@ -1617,9 +1639,9 @@ Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall, Note, Ask, MCP, S
         elif builtin_issue is None:
             resolved_builtin_tools = "active: " + configured_builtin_tools
         elif builtin_issue.reason == "wire":
-            resolved_builtin_tools = f"inactive on {resolved.api}: {configured_builtin_tools}"
+            resolved_builtin_tools = f"inactive on {resolved.api}: {configured_builtin_tools}"  # 当前 wire 协议不支持
         else:
-            resolved_builtin_tools = "invalid: " + ", ".join(builtin_issue.configured)
+            resolved_builtin_tools = "invalid: " + ", ".join(builtin_issue.configured)  # 配置本身非法
         return "\n".join(
             [
                 f"provider.active: {self.session.config.active_provider}",
@@ -1656,7 +1678,7 @@ Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall, Note, Ask, MCP, S
         )
 
     def sessions_command(self, args: str) -> str | None:
-        """Browse saved sessions and re-enter one. `/sessions all` widens past this project."""
+        """浏览已保存的会话并重新进入一个。`/sessions all` 扩大到本项目之外。"""
         argument = args.strip().lower()
         if argument not in {"", "all"}:
             return "Usage: /sessions [all]"
@@ -1665,16 +1687,16 @@ Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall, Note, Ask, MCP, S
             return "No saved sessions yet."
         labels = {entry.uid: self.session_label(entry, all_projects=argument == "all") for entry in entries}
         if self.tui is None or not self.interactive_input:
-            return "\n".join(f"{entry.uid}  {labels[entry.uid]}" for entry in entries)
+            return "\n".join(f"{entry.uid}  {labels[entry.uid]}" for entry in entries)  # 非交互:纯文本列表
         title = "Sessions" + (" · all projects" if argument == "all" else "")
-        # The preview renders on every frame, so it reads the list already in hand, never the store.
+        # 预览每帧都渲染,因此它读的是手里已有的列表,而不是存储。
         by_uid = {entry.uid: entry for entry in entries}
         chosen = self.choice_application(
             title, tuple(entry.uid for entry in entries), labels, self.session.uid, set(), preview_fn=lambda uid: self.session_preview(by_uid.get(uid))
         )
         if not isinstance(chosen, str) or chosen == self.session.uid:
-            return None
-        self.resume_request = chosen
+            return None  # 没选或选了自己:不切换
+        self.resume_request = chosen  # 设置移交目标:本次运行结束后 main 会接管
         self.save_and_emit_resume()
         return None
 
@@ -1682,9 +1704,9 @@ Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall, Note, Ask, MCP, S
         rounds = f"{entry.rounds} round" + ("s" if entry.rounds > 1 else "") if entry.rounds else "no turns"
         parts = [Text.age(time.time() - entry.updated_at), rounds]
         if all_projects and entry.cwd:
-            parts.append(os.path.basename(entry.cwd.rstrip(os.sep)) or entry.cwd)
+            parts.append(os.path.basename(entry.cwd.rstrip(os.sep)) or entry.cwd)  # 跨项目视图:附上项目目录名
         if entry.uid == self.session.uid:
-            parts.append("current")
+            parts.append("current")  # 当前会话打标
         return f"{entry.label()}  ·  " + " · ".join(parts)
 
     def session_preview(self, entry: SessionEntry | None) -> str:
@@ -1693,7 +1715,7 @@ Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall, Note, Ask, MCP, S
         return "\n".join([f"uid   {entry.uid}", f"start {entry.opening or '(no message)'}", f"where {entry.cwd or '(unknown)'}"])
 
     def name_command(self, args: str) -> str:
-        """Show or set the session's name, the label a later `--resume` can be given instead of a uid."""
+        """显示或设置会话名称——之后 `--resume` 可以用它代替 uid。"""
         text = args.strip()
         if not text:
             current = self.session.name
@@ -1701,8 +1723,8 @@ Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall, Note, Ask, MCP, S
             described = source.get(self.session.state.name_source, "")
             return f"Session name: {current} ({described})" if current and described else f"Session name: {current or '(unnamed)'}"
         name = self.session.rename(text)
-        self.session.save_snapshot()
-        return f"Session named: {name}\nResume with: yucode --resume {shlex.quote(name)}"
+        self.session.save_snapshot()  # 改名立即落盘
+        return f"Session named: {name}\nResume with: yucode --resume {shlex.quote(name)}"  # 名字加引号,防 shell 转义问题
 
     def compact(self, args: str) -> str:
         if args.strip():
@@ -1710,18 +1732,19 @@ Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall, Note, Ask, MCP, S
         before = len(self.session.messages)
         compacted, keep = self.agent.context.compaction_parts()
         if not compacted:
-            return "No prior conversation to compact"
+            return "No prior conversation to compact"  # 没有可压缩的历史
         fallback = False
         self.status_bar.begin()
         if self.tui is not None:
-            self.tui.set_running("compacting context")
+            self.tui.set_running("compacting context")  # TUI 标题显示压缩阶段
         else:
             self.status_bar.start(reset=False)
         try:
             data = self.agent.model.compact(self.agent.context.compaction_input(compacted))
         except KeyboardInterrupt:
             return "Cancelled"
-        except Exception:  # noqa: BLE001 - manual compaction uses the same deterministic fallback as automatic compaction.
+        except Exception:  # noqa: BLE001 - 手动压缩与自动压缩走同一条确定性兜底路径
+            # 模型压缩失败:回退到确定性的裁剪压缩(与自动压缩同一兜底)。
             self.agent.context.apply_compaction(None, keep, fallback_note=PREVIOUS_CONTEXT_TRIMMED, compacted=compacted)
             fallback = True
             data = None
@@ -1733,8 +1756,8 @@ Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall, Note, Ask, MCP, S
         if data is not None:
             self.agent.context.apply_compaction(data, keep, compacted=compacted)
         self.agent.context.update_current_tokens(SYSTEM_PROMPT)
-        # Compaction rewrites the history in place. Persist it now: leaving the session without
-        # running another turn would otherwise resume from the log's pre-compaction state.
+        # 压缩就地改写历史。立刻落盘:若直接离开会话而不跑下一个回合,
+        # 下次恢复会从压缩前的日志状态开始。
         self.session.save_snapshot()
         fallback_note = " (fallback)" if fallback else ""
         return (
@@ -1748,7 +1771,7 @@ Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall, Note, Ask, MCP, S
             return "Usage: /index [force]"
         try:
             self.status_bar.start()
-            return CodeIndex(self.session).sync(force=value == "force")
+            return CodeIndex(self.session).sync(force=value == "force")  # force 强制全量重建
         finally:
             self.status_bar.stop()
 
@@ -1757,15 +1780,15 @@ Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall, Note, Ask, MCP, S
         if len(parts) > 1:
             return "Usage: /provider [NAME]"
         if parts:
-            return self.set_provider(parts[0])
+            return self.set_provider(parts[0])  # 带参数:直接切换
         choices = tuple(sorted(self.session.config.providers))
         summary = "provider: " + self.session.config.active_provider + "\nproviders: " + ", ".join(choices)
         current = self.session.config.active_provider
         choice = self.select_choice("Provider", choices, labels={current: current + " (current)"}, current=current)
         if not isinstance(choice, str):
-            return "No change" if choice is SELECTION_BACK else summary
+            return "No change" if choice is SELECTION_BACK else summary  # Esc 显示"未改动";其他异常显示摘要
         provider_result = self.set_provider(choice)
-        model_result = self.model("")
+        model_result = self.model("")  # 切换 provider 后顺手让用户重选模型
         return provider_result + ("\n" + model_result if model_result else "")
 
     def set_provider(self, name: str) -> str:
@@ -1782,16 +1805,16 @@ Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall, Note, Ask, MCP, S
             result = self.set_model(parts[0])
             return "No change" if result is SELECTION_BACK else str(result)
         provider = self.session.config.provider
-        configured = tuple(dict.fromkeys(provider.available_models))
+        configured = tuple(dict.fromkeys(provider.available_models))  # 去重保序
         tui = self.tui
-        show_loading = tui is not None and bool(provider.url and provider.key)
+        show_loading = tui is not None and bool(provider.url and provider.key)  # 有端点才值得拉远端列表
         if show_loading and tui is not None:
-            tui.set_dispatching("Loading models...")
+            tui.set_dispatching("Loading models...")  # 远端发现期间显示加载态
         try:
             remote = tuple(model for model in self.remote_models(provider) if model not in configured)
         finally:
             if show_loading and tui is not None:
-                tui.set_dispatching()
+                tui.set_dispatching()  # 恢复默认标题
         choices: list[str] = []
         if configured:
             choices.extend((self.MODEL_CONFIGURED_LABEL, *configured))
@@ -1810,43 +1833,44 @@ Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall, Note, Ask, MCP, S
             if not isinstance(choice, str):
                 return "Current provider.model is " + (self.session.config.provider.model or "(empty)")
             if choice in self.MODEL_LABELS:
-                continue
+                continue  # 选到分组标题:忽略,继续选
             result = self.set_model(choice, back_to_model=True)
             if result is SELECTION_BACK:
-                continue
+                continue  # 设置过程中 Esc:回到模型列表重选
             return str(result)
 
     def remote_models(self, provider: ProviderConfig) -> tuple[str, ...]:
         if not provider.url or not provider.key:
-            return ()
+            return ()  # 没有端点与 key,就无可发现的模型
         try:
-            # lazy import: /model discovery is the only OpenAI use here, so the SDK stays off the startup path
+            # 惰性导入:/model 发现是这里唯一的 openai SDK 用法,让它留在启动路径之外
             from openai import OpenAI
 
             page = OpenAI(
                 api_key=provider.key,
                 base_url=provider.resolve().base_url,
-                timeout=min(provider.timeout, 10),
-                max_retries=0,
+                timeout=min(provider.timeout, 10),  # 发现请求最多等 10 秒,不拖住交互
+                max_retries=0,  # 失败就失败,不重试:可选的发现功能
                 default_headers={"User-Agent": HTTP_USER_AGENT},
             ).models.list()
-        except Exception:  # noqa: BLE001 - remote model discovery is optional and provider SDKs expose varied failures.
-            return ()
+        except Exception:  # noqa: BLE001 - 远端模型发现是可选的,provider SDK 的失败形态五花八门
+            return ()  # 发现失败不阻塞 /model:返回空列表
         names = []
         for item in getattr(page, "data", page) or []:
-            name = item.get("id") if isinstance(item, dict) else getattr(item, "id", None)
+            name = item.get("id") if isinstance(item, dict) else getattr(item, "id", None)  # 兼容 dict 与对象两种分页形态
             if isinstance(name, str) and name:
                 names.append(name)
-        return tuple(sorted(dict.fromkeys(names)))
+        return tuple(sorted(dict.fromkeys(names)))  # 去重排序
 
     def set_model(self, model: str, *, back_to_model: bool = False) -> str | object:
+        # 依次确认 api 与 reasoning;任一环节 Esc 都可放弃(或返回模型列表)。
         while True:
             api = self.select_api(model)
             if api is SELECTION_BACK:
-                return SELECTION_BACK if back_to_model else "No change"
+                return SELECTION_BACK if back_to_model else "No change"  # Esc:回模型列表或放弃
             reasoning = self.select_reasoning()
             if reasoning is not SELECTION_BACK:
-                break
+                break  # reasoning 未取消:api 与 reasoning 都确定下来
         provider = self.session.config.provider
         provider.model = model
         lines = ["Set provider.model = " + model]
@@ -1861,10 +1885,10 @@ Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall, Note, Ask, MCP, S
         value = args.strip()
         if value:
             if value not in REASONING_CHOICES:
-                return "Usage: /reason " + "|".join(REASONING_CHOICES)
+                return "Usage: /reason " + "|".join(REASONING_CHOICES)  # 非法值:给出用法
             self.session.config.provider.reasoning = value
             return "Set provider.reasoning = " + value
-        choice = self.select_reasoning()
+        choice = self.select_reasoning()  # 无参数:走选择器交互
         if isinstance(choice, str):
             self.session.config.provider.reasoning = choice
             return "Set provider.reasoning = " + choice
@@ -1877,29 +1901,29 @@ Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall, Note, Ask, MCP, S
             if value not in PROVIDER_API_CHOICES:
                 return "Usage: /api " + "|".join(PROVIDER_API_CHOICES)
             return self.set_api(value)
-        choice = self.select_api(provider.model)
+        choice = self.select_api(provider.model)  # 无参数:走选择器交互
         return self.set_api(choice) if isinstance(choice, str) else "No change"
 
     def set_api(self, value: str) -> str:
         provider = self.session.config.provider
         provider.api = value
-        # "auto" is the usual choice, so name the wire it resolved to rather than echoing the setting back.
+        # "auto" 是常见选择,所以回报解析出的实际 wire 协议,而不是把设置原样回显。
         resolved = provider.resolve()
         result = f"Set provider.api = {value} (wire: {resolved.api})"
         issue = builtin_tools_issue(resolved, provider.builtin_tools)
         if issue is not None:
             if issue.reason == "wire":
-                result += f"; builtin_tools inactive on {resolved.api}"
+                result += f"; builtin_tools inactive on {resolved.api}"  # 该 wire 协议不支持内置工具
             else:
                 result += "; unsupported builtin_tools: " + ", ".join(issue.configured)
         return result
 
     def yolo(self, args: str) -> str:
-        self.session.settings.yolo = not self.session.settings.yolo
+        self.session.settings.yolo = not self.session.settings.yolo  # 翻转原子标志,agent 在下次审批时读取
         return "yolo: " + ("on" if self.session.settings.yolo else "off")
 
     def hints(self, args: str) -> str:
-        self.session.settings.quick_hints = not self.session.settings.quick_hints
+        self.session.settings.quick_hints = not self.session.settings.quick_hints  # 开关 quick hints 提示
         return "quick hints: " + ("on" if self.session.settings.quick_hints else "off")
 
     def strict(self, args: str) -> str:
@@ -1911,6 +1935,7 @@ Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall, Note, Ask, MCP, S
         if provider.strict_tools:
             resolved = provider.resolve()
             if not resolved.strict_tools_active:
+                # 打开了但当前 provider 不支持:明确告知,避免用户以为已生效。
                 return f"strict_tools: {state} (inactive: {resolved.host or 'this provider'} does not support strict tool calling)"
         return f"strict_tools: {state}"
 
@@ -1924,28 +1949,28 @@ Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall, Note, Ask, MCP, S
         target_name, attr, coerce = handler
         choices = SET_CHOICES.get(key)
         if choices is not None and value not in choices:
-            return "Invalid value for " + key
+            return "Invalid value for " + key  # 封闭取值集合:先校验再写
         obj = self.session.config.provider if target_name == "provider" else self.session.settings
         try:
             if coerce is not None:
-                value = coerce(value)
+                value = coerce(value)  # 类型转换兼边界约束(如 max(1, int(v)))
             setattr(obj, attr, value)
         except (ConfigError, ValueError):
-            return "Invalid value for " + key
+            return "Invalid value for " + key  # 转换失败 = 非法值
         return "Set " + key
 
 
 class TuiRuntime:
-    """Own the interactive session timeline while CommandLoop owns session behavior."""
+    """在 CommandLoop 拥有会话行为的同时,拥有交互会话的时间线。"""
 
     def __init__(self, command_loop: CommandLoop):
         self.loop = command_loop
-        self.pending: queue.Queue[UserInput] = queue.Queue()
-        self.stop = threading.Event()
-        self.cancel_pending = threading.Event()
-        self.main_busy = threading.Event()
-        self.force_exit_timer: threading.Timer | None = None
-        self.error: BaseException | None = None
+        self.pending: queue.Queue[UserInput] = queue.Queue()  # TUI 线程 -> agent 线程的输入管道
+        self.stop = threading.Event()  # 退出信号
+        self.cancel_pending = threading.Event()  # 取消已请求(去重防重复)
+        self.main_busy = threading.Event()  # agent 是否正在跑回合(决定 Ctrl-C 是否要 SIGINT)
+        self.force_exit_timer: threading.Timer | None = None  # 强制退出兜底定时器
+        self.error: BaseException | None = None  # TUI 线程的失败记到这里,在主线程抛出
 
     @property
     def tui(self) -> TuiApp:
@@ -1953,57 +1978,64 @@ class TuiRuntime:
         return self.loop.tui
 
     def _interrupt_active(self, cancel: Callable[[], None]) -> None:
+        # 取消走独立线程,防止取消逻辑本身阻塞 UI 线程;agent 线程若在忙,
+        # 还需要 SIGINT 打断它阻塞中的系统调用(如等待模型响应)。
         threading.Thread(target=cancel, daemon=True).start()
         if self.main_busy.is_set():
             os.kill(os.getpid(), signal.SIGINT)
 
     def interrupt(self) -> None:
         if self.cancel_pending.is_set():
-            return
+            return  # 已在取消流程中:忽略重复请求
         self.cancel_pending.set()
-        self.tui.set_running("cancelling")
+        self.tui.set_running("cancelling")  # 输入框提示切换到取消状态
         self._interrupt_active(self.loop.agent.cancel)
 
     def _request_model_retry(self) -> None:
         state = self.loop.session.state
         if state.current_model_call_started_at <= 0 or state.manual_model_retry_requested:
-            return
-        state.manual_model_retry_requested = True
+            return  # 没有在途请求,或已在重试:忽略
+        state.manual_model_retry_requested = True  # 防抖:一个回合只允许一次手动重试
         state.model_retry_count += 1
         self.tui.invalidate()
-        self._interrupt_active(self.loop.agent.model.cancel)
+        self._interrupt_active(self.loop.agent.model.cancel)  # 中断当前请求,让模型层自动重发
 
     def submit_running(self, value: str | UserInput) -> None:
         value = value if isinstance(value, UserInput) else UserInput(value)
         text = str(value).strip()
         if not text:
-            return
+            return  # 空白输入忽略
         if not value.images and "\n" not in text and text.startswith("/"):
+            # 运行中的单行斜杠命令:走白名单的只读命令线程(不打断 agent)。
             threading.Thread(target=self.loop.run_queued_command, args=(text,), daemon=True).start()
         else:
-            self.loop.session.enqueue_user_input(value)
+            self.loop.session.enqueue_user_input(value)  # 普通输入:排队等下一个请求认领
             self.loop.session.save_snapshot()
         self.tui.invalidate()
 
     def recall(self) -> str | UserInput:
+        # 回忆最近一条排队输入;若它已随请求发出,先触发模型重试。
         return self.loop.recall_pending_input(self._request_model_retry)
 
     def expand_output(self) -> None:
+        # Ctrl-O:Bash 输出查看器放在后台线程,避免阻塞 TUI 渲染。
         threading.Thread(target=self.loop.bash_output_viewer, name="bash-output", daemon=True).start()
 
     def request_exit(self) -> None:
         self.stop.set()
-        self.loop.save_and_emit_resume()
+        self.loop.save_and_emit_resume()  # 退出前保存会话并打印恢复命令
 
     def force_exit(self) -> None:
         self.stop.set()
         threading.Thread(target=self.loop.agent.cancel, daemon=True).start()
+        # 兜底:1 秒后 SIGTERM;正常取消路径走完时定时器会在 run() 的 finally 里取消。
         self.force_exit_timer = threading.Timer(1.0, lambda: os.kill(os.getpid(), signal.SIGTERM))
         self.force_exit_timer.daemon = True
         self.force_exit_timer.start()
-        os.kill(os.getpid(), signal.SIGINT)
+        os.kill(os.getpid(), signal.SIGINT)  # 立刻 SIGINT:让阻塞中的 agent 线程退出
 
     def build_tui(self) -> TuiApp:
+        # 把 TUI 的各种回调接到 TuiRuntime/CommandLoop 上:TuiApp 只负责渲染与按键。
         return TuiApp(
             on_chat_submit=self.pending.put,
             on_running_submit=self.submit_running,
@@ -2027,29 +2059,29 @@ class TuiRuntime:
         if not entered:
             return
         first = entered[0] if isinstance(entered[0], UserInput) else UserInput(entered[0])
-        self.pending.put(first)
+        self.pending.put(first)  # 第一条进 pending 队列:保持原有顺序
         for text in entered[1:]:
-            self.loop.session.enqueue_user_input(text)
+            self.loop.session.enqueue_user_input(text)  # 其余排队给 agent
 
     def reset_turn(self) -> None:
-        self.loop.model_stream_output("", "")
-        # A request can fail after permanent promotion but before Agent re-publishes the text and
-        # consumes its marker. Never let that stale marker suppress an identical later response.
+        self.loop.model_stream_output("", "")  # 清掉流预览
+        # 请求可能在"永久提升之后、Agent 重新发布文本并消费标记之前"失败。
+        # 绝不能让这个过期的标记抑制一条内容相同的后续响应。
         with self.loop.model_stream_lock:
             self.loop.model_stream_promoted_text = ""
         self.tui.set_idle()
-        self.cancel_pending.clear()
-        self.main_busy.clear()
+        self.cancel_pending.clear()  # 回合重置:下次打断重新可用
+        self.main_busy.clear()  # 主线程恢复空闲:之后 Ctrl-C 不再需要 SIGINT
 
     def dispatch(self, user_input: str | UserInput) -> bool:
-        """Dispatch one input. Return true when it was fully handled as a command."""
+        """分发一条输入。当它被完全当作命令处理时返回 true。"""
         user_input = user_input if isinstance(user_input, UserInput) else UserInput(user_input)
-        self.loop.ui.emit_answer(user_input.display_text(), role="user", rule=False)
+        self.loop.ui.emit_answer(user_input.display_text(), role="user", rule=False)  # 先回显用户输入
         try:
             handled, exit_now = self.loop.command(user_input.strip())
         except (KeyboardInterrupt, YucodeError) as error:
             self.loop.emit("Cancelled" if isinstance(error, KeyboardInterrupt) else f"Error: {error}")
-            self.submit_next(self.loop.take_pending_inputs())
+            self.submit_next(self.loop.take_pending_inputs())  # 命令中断:排队输入不滞留
             self.reset_turn()
             return True
         if exit_now:
@@ -2058,13 +2090,13 @@ class TuiRuntime:
             self.tui.exit()
             return True
         if handled:
-            # A command must not strand queued follow-ups: flush them as run_agent_turn does, so
-            # they keep chaining once the command completes (e.g. /compact then queued input).
-            # Submit before restoring the idle prompt, where newer input can enter `pending`.
+            # 命令不能滞留排队的跟进输入:像 run_agent_turn 那样刷掉它们,让它们在命令
+            # 完成后继续链式执行(例如 /compact 之后的排队输入)。
+            # 在恢复空闲提示符之前提交——之后新输入会进入 `pending`。
             self.submit_next(self.loop.take_pending_inputs())
             self.reset_turn()
             return True
-        return False
+        return False  # 未处理:调用方去跑 agent 回合
 
     def run_agent_turn(self, user_input: str | UserInput) -> None:
         user_input = user_input if isinstance(user_input, UserInput) else UserInput(user_input)
@@ -2078,7 +2110,7 @@ class TuiRuntime:
         try:
             answer = self.loop.agent.run(user_input)
         except KeyboardInterrupt:
-            self.submit_next(self.loop.take_pending_inputs())
+            self.submit_next(self.loop.take_pending_inputs())  # 取消时也要把排队输入交回队列
             answer = ""
             cancelled = True
         except MalformedToolCallError as error:
@@ -2087,13 +2119,13 @@ class TuiRuntime:
         except YucodeError as error:
             answer = f"Error: {error}"
         finally:
-            # Snapshot the stream-promotion marker before reset_turn clears it: a terminal NextHints
-            # batch promotes its answer into scrollback like any tool batch, but nothing re-publishes
-            # it through agent_output, so without this the final emit below would print it again.
+            # 在 reset_turn 清掉标记之前先快照流提升标记:终止性的 NextHints 批次会像任何
+            # 工具批次一样把答案提升进 scrollback,但没有任何东西再经 agent_output 重新发布
+            # 它——没有这一步,下面的最终 emit 会把它再打印一遍。
             with self.loop.model_stream_lock:
                 promoted_answer = self.loop.model_stream_promoted_text
             self.reset_turn()
-            self.loop.session.state.manual_model_retry_requested = False
+            self.loop.session.state.manual_model_retry_requested = False  # 回合结束:重置重试防抖
             CodeIndex(self.loop.session).update_pending_async()
         if cancelled:
             self.loop.emit("Cancelled")
@@ -2102,24 +2134,26 @@ class TuiRuntime:
             if self.loop.ui.color:
                 self.loop.emit()
             self.loop.ui.emit_answer(remaining, rule=False)
-        # Emitted outside the promotion check: a promoted answer is already in scrollback without
-        # its sources, so skipping the footer there would drop them exactly when a search ran.
+        # 在提升检查之外发出:被提升的答案已经在 scrollback 里却没有来源页脚,
+        # 如果这里跳过页脚,恰恰会在"确实跑过搜索"的时候丢掉它。
         if footer := search_sources_footer(self.loop.agent.turn_sources):
             self.loop.ui.emit_answer(footer, rule=False)
         if not malformed_tool_call:
             self.loop.ui.emit_turn_end(started)
         self.loop.session.save_snapshot()
-        self.submit_next(self.loop.take_pending_inputs())
+        self.submit_next(self.loop.take_pending_inputs())  # 回合结束:让排队输入继续链式执行
 
     def run_agent_loop(self) -> None:
         while not self.stop.is_set():
             try:
-                user_input = self.pending.get(timeout=0.1)
+                user_input = self.pending.get(timeout=0.1)  # 带超时轮询:同时响应 stop 事件
             except queue.Empty:
                 continue
-            self.main_busy.set()
-            self.loop.session.clear_quick_hints()  # the user acted; drop last turn's offerings (also covers slash commands, which skip Agent.run)
+            self.main_busy.set()  # 进入忙碌态
+            # 用户行动了:丢掉上一回合的提示(也覆盖跳过 Agent.run 的斜杠命令)。
+            self.loop.session.clear_quick_hints()
             if self.cancel_pending.is_set():
+                # 取消在排队时就已请求:不执行这条输入,直接重置回合。
                 self.loop.emit("Cancelled")
                 self.reset_turn()
                 continue
@@ -2129,31 +2163,31 @@ class TuiRuntime:
     def run_tui_app(self) -> None:
         try:
             self.tui.run(style=self.loop.style())
-        except BaseException as error:  # noqa: BLE001 - propagate every TUI-thread failure on the main thread.
+        except BaseException as error:  # noqa: BLE001 - 把 TUI 线程的每个失败都带到主线程抛出
             self.error = error
             self.stop.set()
 
     def run(self) -> int:
-        """Run the agent on the main thread and prompt-toolkit on one joined UI thread."""
+        """agent 跑在主线程,prompt-toolkit 跑在一个被 join 的 UI 线程上。"""
         self.loop.tui = self.build_tui()
         tui_thread = threading.Thread(target=self.run_tui_app, name="tui")
         tui_thread.start()
         try:
-            self.tui.ready.wait()
+            self.tui.ready.wait()  # 等 TUI 就绪(如 patch_stdout 接管终端)
             if self.error is not None:
-                raise self.error
-            # Emit startup and restored transcript lines only after patch_stdout owns the terminal,
-            # so the primary-screen application places them in native terminal/tmux scrollback.
+                raise self.error  # TUI 启动失败:立刻在主线程暴露
+            # 只有 patch_stdout 拥有终端之后才输出启动与恢复转录行,
+            # 让主屏应用把它们放进原生终端/tmux scrollback。
             self.loop.start_session()
             self.submit_next(self.loop.take_pending_inputs())
             self.run_agent_loop()
         finally:
             self.stop.set()
             if self.force_exit_timer is not None:
-                self.force_exit_timer.cancel()
+                self.force_exit_timer.cancel()  # 正常退出:取消 SIGTERM 兜底定时器
             self.tui.exit()
-            # Do not let interpreter finalization race a TUI thread flushing stdout. The emergency
-            # force-exit timer remains responsible for terminating a genuinely wedged application.
+            # 不要让解释器终结流程与正在刷 stdout 的 TUI 线程赛跑。
+            # 真正卡死的应用仍由紧急 force-exit 定时器负责终结。
             tui_thread.join()
             try:
                 self.loop.close_background_output()

@@ -1,4 +1,4 @@
-"""MCP tool: calling tools and reading resources on configured MCP servers."""
+"""MCP 工具:调用已配置 MCP 服务器上的工具,以及读取其资源。"""
 
 from __future__ import annotations
 
@@ -32,7 +32,7 @@ class MCPTool(Tool):
 
     @classmethod
     def resolved_action(cls, payload: Json) -> str:
-        """Effective action; defaults to "call" when omitted but the envelope looks like an invocation."""
+        """最终生效的 action;省略时若载荷形如一次调用则默认为 "call"。"""
         action = str(payload.get("action") or "").strip()
         if action:
             return action

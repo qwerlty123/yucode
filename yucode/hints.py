@@ -1,13 +1,12 @@
-"""Idle-input hint mechanism.
+"""空闲输入提示机制。
 
-One centralized place for the low-noise tips shown in the empty input placeholder. Each hint
-declares its text, a weight, and an optional applicability predicate over a small Context that
-describes the session's current situation. HintPicker draws a weighted random hint among the
-applicable ones and caches it per Context, so a frequently re-rendered placeholder stays stable
-and only re-rolls when the situation changes (a new editing round, leaving the early phase, ...).
+空输入占位符中展示的低干扰提示都集中在这里。每条提示声明自己的文本、权重,
+以及一个基于小型 Context(描述会话当前状况)的可选适用性谓词。HintPicker 在适用的提示中
+按权重随机抽取一条,并按 Context 缓存结果,这样频繁重渲染的占位符保持稳定,
+只在状况变化(进入新一轮编辑、离开早期阶段……)时重新抽取。
 
-Adding a tip is one line in HINTS; adding a new kind of situation is one field on Context plus a
-predicate. The selection logic itself never changes.
+新增一条提示只需在 HINTS 里加一行;新增一种状况只需在 Context 上加一个字段并写一个谓词。
+选择逻辑本身永不改动。
 """
 
 from __future__ import annotations
@@ -19,13 +18,13 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class Context:
-    """The session situation that decides which hints apply."""
+    """决定哪些提示适用的会话状况。"""
 
-    early: bool  # the session has done no work yet; navigation tips are welcome
-    edited_round: int | None  # the round that just edited files, or None
-    skills_available: bool = False  # at least one skill is installed
-    mcp_connected: bool = False  # at least one MCP server is connected
-    jobs_running: bool = False  # a background job is still running
+    early: bool  # 会话尚未开始任何工作;此时欢迎导航类提示
+    edited_round: int | None  # 刚刚编辑过文件的那一轮,或 None
+    skills_available: bool = False  # 是否至少安装了一个技能
+    mcp_connected: bool = False  # 是否至少连接了一个 MCP 服务器
+    jobs_running: bool = False  # 是否仍有后台任务在运行
 
 
 def _when_early(ctx: Context) -> bool:
@@ -50,7 +49,7 @@ def _when_jobs(ctx: Context) -> bool:
 
 @dataclass(frozen=True)
 class Hint:
-    """One candidate tip: its text, selection weight, and when it applies (None = always)."""
+    """一条候选提示:文本、选择权重,以及适用条件(None 表示始终适用)。"""
 
     text: str
     weight: int = 1
@@ -70,21 +69,20 @@ HINTS: tuple[Hint, ...] = (
     Hint("Questions about yucode? Just ask"),
     Hint("Type / for commands"),
     Hint("/sessions resumes a past session", when=_when_early),
-    # Right after editing, /diff is the most useful tip: weight it high, but keep it a random
-    # pick so repeated edits do not show the same line every time.
+    # 刚编辑完后 /diff 是最有用的提示:权重调高,但仍保持随机抽取,
+    # 这样反复编辑时不会每次都显示同一行。
     Hint("/diff reviews recent edits", weight=3, when=_when_edited),
-    # While a background job runs, remind the user it can be listed; clears once none run.
+    # 后台任务运行时提醒用户它可以被列出;没有任务运行后该提示自然消失。
     Hint("/ps lists background jobs", weight=2, when=_when_jobs),
 )
 
 
 class HintPicker:
-    """Weighted, per-Context cached selection over HINTS (see module docstring).
+    """按权重、按 Context 缓存的 HINTS 选择(参见模块 docstring)。
 
-    The pick is cached per (Context, round_no) so a frequently re-rendered placeholder does not
-    flicker; it re-rolls when the situation changes or a new round begins. The caller supplies
-    round_no (e.g. the session round counter); the picker keeps no round state of its own. Inject
-    `choice` for deterministic tests.
+    抽取结果按 (Context, round_no) 缓存,这样频繁重渲染的占位符不会闪烁;
+    当状况变化或新一轮开始时重新抽取。调用方提供 round_no(例如会话轮次计数器);
+    选择器自身不保存轮次状态。测试时可注入 `choice` 以获得确定性结果。
     """
 
     def __init__(self, choice: Callable[[Sequence[str]], str] = random.choice) -> None:

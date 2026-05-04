@@ -1,4 +1,4 @@
-"""Tool base class: schema generation, argument parsing, and result helpers."""
+"""工具基类:schema 生成、参数解析与结果辅助函数。"""
 
 from __future__ import annotations
 
@@ -13,21 +13,18 @@ from yucode.session import Session, TurnDiff
 
 
 class Tool:
-    """One capability the model can invoke: its schema, its arguments, and a single call.
+    """模型可调用的一项能力:它的 schema、参数与一次调用。
 
-    A subclass declares itself through class attributes and implements `call`. Those attributes are
-    not documentation — the runner reads them: `MUTATES` decides whether a call needs confirmation,
-    `STORES_RESULT` whether its output is retained for recall, `PRODUCES_MODEL_OBSERVATION` whether it
-    contributes more than text. `DESCRIPTION` and `EXAMPLE` are prompt surface and cost context on
-    every request.
+    子类通过类属性声明自身并实现 `call`。这些属性不是文档——运行器会读取它们:
+    `MUTATES` 决定一次调用是否需要确认,`STORES_RESULT` 决定其输出是否保留供回忆(recall),
+    `PRODUCES_MODEL_OBSERVATION` 决定它是否贡献超出文本的内容。`DESCRIPTION` 与 `EXAMPLE`
+    是每次请求都携带的提示词表面与成本上下文。
 
-    The JSON Schema comes from `params_schema`, rewritten when the provider demands strict function
-    calling, where every property is required and optionals become nullable. A schema containing a
-    free-form object cannot be expressed that way and falls back to non-strict rather than being
-    silently narrowed.
+    JSON Schema 来自 `params_schema`;当供应商要求严格函数调用时会被改写,
+    此时每个属性都是必填,可选项变为可空。包含自由形式对象的 schema 无法用这种方式表达,
+    会回退为非严格模式,而不是被静默收窄。
 
-    An instance is per call, not per session: state read afterward, such as an edit's diff, describes
-    that one invocation.
+    实例按调用而非按会话创建:调用之后读取的状态(如一次编辑的 diff)描述的是那一次调用。
     """
 
     NAME: ClassVar[str] = ""
@@ -38,19 +35,19 @@ class Tool:
     PRODUCES_MODEL_OBSERVATION: ClassVar[bool] = False
     STORES_RESULT: ClassVar[bool] = True
     LOG_LEXER: ClassVar[str] = "tool-args"
-    SILENT: ClassVar[bool] = False  # a pure-UI tool whose effect is shown elsewhere; suppress its call/result log line
+    SILENT: ClassVar[bool] = False  # 纯 UI 工具,其效果展示在别处;抑制其调用/结果日志行
 
     def __init__(self, session: Session, args: ToolArgs):
         self.session = session
         self.args = args
 
     def turn_diff(self) -> TurnDiff | None:
-        """The file diff this tool produced on its last run, or None if it made no edit. Overridden
-        by EditTool; the runner records it against the stored result for the /diff viewer."""
+        """该工具上次运行产生的文件 diff;若未做任何编辑则为 None。
+        由 EditTool 覆写;运行器将其记录到存储结果上,供 /diff 查看器使用。"""
         return None
 
     def model_observation(self) -> Json | None:
-        """A model-facing observation produced by the completed call, if any."""
+        """完成调用后产生的面向模型的观察(若有)。"""
         return None
 
     @classmethod
@@ -59,17 +56,17 @@ class Tool:
         function: Json = {"name": cls.NAME, "description": description, "parameters": cls.params_schema()}
         if strict and cls._strictifiable(function["parameters"]):
             function["parameters"] = cls._strict_schema(function["parameters"])
-            function["strict"] = True
+            function["strict"] = True  # 标记为严格函数
         return {"type": "function", "function": function}
 
     @staticmethod
     def resolved_schemas(session: Session) -> list[Json]:
-        """Return the tool schemas available for this session and provider."""
+        """返回该会话与供应商可用的工具 schema。"""
 
-        from yucode.tools import TOOL_REGISTRY, MCPTool, NextHintsTool, SkillTool  # local import: the registry is built on top of every tool
+        from yucode.tools import TOOL_REGISTRY, MCPTool, NextHintsTool, SkillTool  # 局部导入:注册表构建在所有工具之上
 
         strict = session.config.provider.resolve().strict_tools_active
-        # Optional tool families stay out of the model prefix until they have usable session state.
+        # 可选工具族在具备可用的会话状态之前,不进入模型前缀。
         has_skills = bool(session.skills and session.skills.skills)
         has_mcp = bool(session.mcp and (session.mcp.tools or session.mcp.resources))
         return [
@@ -80,8 +77,8 @@ class Tool:
 
     @staticmethod
     def _strictifiable(schema: object) -> bool:
-        """False if the schema contains a free-form object (an `object` with no `properties`),
-        which strict function calling cannot represent — such tools fall back to non-strict."""
+        """若 schema 包含自由形式对象(没有 `properties` 的 `object`)则返回 False——
+        严格函数调用无法表达它,此类工具回退为非严格模式。"""
         if isinstance(schema, dict):
             if schema.get("type") == "object" and "properties" not in schema:
                 return False
@@ -92,11 +89,11 @@ class Tool:
 
     @staticmethod
     def _strict_schema(schema: Json) -> Json:
-        """Rewrite a JSON Schema to satisfy strict function-calling (OpenAI / DeepSeek beta):
-        every object property becomes required (genuine optionals turned nullable),
-        additionalProperties is forced false, and unsupported keywords are dropped."""
-        # Strict validators only allow scalar types in a `type` union; object/array nullability
-        # must be expressed with anyOf instead (e.g. {"anyOf": [<array schema>, {"type": "null"}]}).
+        """改写 JSON Schema 以满足严格函数调用(OpenAI / DeepSeek beta):
+        每个对象属性都变为必填(真正的可选项转为可空),
+        additionalProperties 强制为 false,不支持的 关键字被丢弃。"""
+        # 严格校验器只允许 `type` 联合中出现标量类型;对象/数组的可空性
+        # 必须改用 anyOf 表达(例如 {"anyOf": [<array schema>, {"type": "null"}]})。
         scalars = ("string", "number", "integer", "boolean")
 
         def nullable(sub: Json) -> Json:
@@ -108,13 +105,13 @@ class Tool:
                     sub["type"] = [*kind, "null"]
             else:
                 return {"anyOf": [sub, {"type": "null"}]}
-            # An enum must accept null too, otherwise strict validation rejects the "omitted" value.
+            # enum 也必须接受 null,否则严格校验会拒绝"省略"这一取值。
             if isinstance(sub.get("enum"), list) and None not in sub["enum"]:
                 sub["enum"] = [*sub["enum"], None]
             return sub
 
-        # Json is intentionally shallow (dict[str, Any]); this recursive schema transform is one
-        # of the places where preserving that dynamic value type is clearer than repeated casts.
+        # Json 刻意保持浅层(dict[str, Any]);这个递归 schema 变换就是保留动态值类型
+        # 比反复转换类型更清晰的地方之一。
         def transform(node: Any) -> Any:
             if isinstance(node, list):
                 return [transform(item) for item in node]

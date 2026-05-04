@@ -1,4 +1,4 @@
-"""Search tools: text search and code symbol inspection."""
+"""搜索工具:文本搜索与代码符号检查。"""
 
 from __future__ import annotations
 
@@ -137,12 +137,11 @@ class SearchTool(Tool):
         return hidden or self.ignored(path, patterns)
 
     def search(self, request: Json) -> str:
-        """Search one request, preferring ripgrep and falling back to a Python scan.
+        """执行一次搜索请求,优先使用 ripgrep,回退到 Python 扫描。
 
-        Three cases, in order: a hidden or gitignored target returns no rows without touching disk; a
-        multiline pattern skips ripgrep, which matches within a line; anything else tries ripgrep and
-        falls back when it is absent or exits in a way the caller cannot interpret. The fallback is a
-        requirement rather than an optimization, because ripgrep is not a dependency.
+        依次三种情况:隐藏或 gitignore 的目标不触碰磁盘直接返回空结果;多行模式跳过
+        ripgrep(它只在行内匹配);其余情况先尝试 ripgrep,在其缺失或退出方式无法解释时
+        回退。回退是需求而非优化,因为 ripgrep 不是依赖。
         """
         patterns = self.gitignore_patterns(str(request["path"]))
         rows = [] if self.default_ignored(str(request["path"]), patterns) else None
@@ -251,17 +250,14 @@ class SearchTool(Tool):
 
 
 class CodeIndex:
-    """Keep the symbol index useful without ever making the user wait for it.
+    """让符号索引保持有用,同时绝不让用户为它等待。
 
-    An optional accelerator: absent, stale, or broken, symbol lookups fall back to ordinary search
-    rather than failing, which is why every integration failure here becomes a status instead of an
-    exception. That status is published for the status bar to display.
+    一个可选的加速器:无论缺失、过期还是损坏,符号查找都会回退到普通搜索而不是失败,
+    这也是这里所有集成失败都变成状态而非异常的原因。该状态对外发布,供状态栏展示。
 
-    Freshness is opportunistic. Checking the working tree hashes files and is slow on a large
-    repository, so it runs on a background thread after a turn, never in the path of an answer, and a
-    flag keeps scans from stacking up. A few changed files are re-indexed automatically; beyond that
-    the index is marked stale for an explicit sync, because a large rebuild is the user's time to
-    spend.
+    新鲜度是机会主义的。检查工作树需要对文件做哈希,在大仓库上很慢,因此它在每轮之后的
+    后台线程中运行,绝不在回答路径上,并用一个标志防止扫描堆积。少量变更文件会自动重建索引;
+    超出该范围则把索引标记为过期,等待显式同步,因为大规模重建花费的是用户的时间。
     """
 
     AUTO_UPDATE_LIMIT: ClassVar[int] = 20
@@ -311,7 +307,7 @@ class CodeIndex:
     def status(self, *, check: bool = False, max_pending_files: int = 20) -> tuple[str, str]:
         try:
             data = csi.status(self.session.cwd, check=check, max_pending_files=max_pending_files)
-        except Exception as error:  # noqa: BLE001 - isolate failures from the optional code-index integration.
+        except Exception as error:  # noqa: BLE001 - 隔离可选代码索引集成产生的失败。
             self.set_status("error", str(error))
             return "error", str(error)
         status = str(getattr(data, "status", "") or "error")
@@ -334,7 +330,7 @@ class CodeIndex:
         self.notice("syncing", refreshing=True)
         try:
             csi.index(self.session.cwd)
-        except Exception as error:  # noqa: BLE001 - isolate failures from the optional code-index integration.
+        except Exception as error:  # noqa: BLE001 - 隔离可选代码索引集成产生的失败。
             return "code_index: error\n" + self.fail(error)
         self.finish()
         status, message = self.status(check=True)
@@ -351,7 +347,7 @@ class CodeIndex:
         self.notice("updating", refreshing=True)
         try:
             csi.update(paths, root=self.session.cwd)
-        except Exception as error:  # noqa: BLE001 - isolate failures from the optional code-index integration.
+        except Exception as error:  # noqa: BLE001 - 隔离可选代码索引集成产生的失败。
             return self.fail(error)
         self.finish()
         return "updated " + str(len(paths)) + " file(s)"
@@ -361,7 +357,7 @@ class CodeIndex:
             return ""
         try:
             data = csi.status(self.session.cwd, check=True, max_pending_files=self.AUTO_UPDATE_LIMIT + 1)
-        except Exception:  # noqa: BLE001 - background index freshness checks are best-effort.
+        except Exception:  # noqa: BLE001 - 后台索引新鲜度检查是尽力而为。
             return ""
         self.set_status(str(getattr(data, "status", "") or "error"), str(getattr(data, "message", None) or getattr(data, "reason", None) or ""))
         if getattr(data, "status", "") != "stale":
@@ -373,11 +369,11 @@ class CodeIndex:
         return self.update([self.session.resolve_path(path) for path in files])
 
     def update_pending_async(self) -> None:
-        """Run the working-tree check (and any auto-update) off the UI critical path.
+        """把工作树检查(及任何自动更新)移出 UI 关键路径。
 
-        ``update_pending`` does a ``check=True`` scan that walks/hashes the tree — slow on
-        large repos. Running it inline blocks answer emission and /status, so spawn it in a
-        daemon thread. Guarded so only one scan/update runs at a time.
+        ``update_pending`` 执行 ``check=True`` 扫描,需要遍历/哈希整棵树——在大仓库上很慢。
+        内联运行会阻塞答案输出与 /status,因此放到守护线程中。有护栏保证同一时刻
+        只有一个扫描/更新在运行。
         """
         if self.session.state.code_index_checking or self.session.state.code_index_refreshing:
             return
@@ -400,7 +396,7 @@ class CodeIndex:
         self.notice("syncing", refreshing=True)
         try:
             worker = csi.refresh_async(self.session.cwd)
-        except Exception as error:  # noqa: BLE001 - isolate failures from the optional code-index integration.
+        except Exception as error:  # noqa: BLE001 - 隔离可选代码索引集成产生的失败。
             self.fail(error)
             return False
 
@@ -410,7 +406,7 @@ class CodeIndex:
                 self.session.state.code_index_refreshing = False
                 self.session.state.code_index_notice = ""
                 self.status(check=True)
-            except Exception as error:  # noqa: BLE001 - isolate background code-index failures.
+            except Exception as error:  # noqa: BLE001 - 隔离后台代码索引失败。
                 self.fail(error)
 
         threading.Thread(target=finish, daemon=True).start()
@@ -481,9 +477,9 @@ class InspectCodeTool(Tool):
         if not target:
             raise ToolError("InspectCode target is required")
         if mode in self.SYMBOL_MODES and self._WHITESPACE_RE.search(target):
-            # Models often repeat the kind inside the target, e.g. target "class Config" with
-            # kind "class". When the first word duplicates a declared kind, drop it — that is the one
-            # case we can strip deterministically (no guessing at per-language keywords).
+            # 模型常在 target 中重复 kind,例如 target "class Config" 且 kind "class"。
+            # 当第一个词与已声明的 kind 重复时就丢弃它——这是唯一能确定性剥离的情况
+            # (不需要猜测各语言的关键字)。
             kinds = {token.strip().lower() for token in str(options.get("kind") or "").split(",") if token.strip()}
             first, _, rest = target.partition(" ")
             if kinds and first.lower() in kinds and rest.strip():

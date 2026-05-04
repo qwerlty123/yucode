@@ -1,4 +1,4 @@
-"""yucode update check: the background PyPI version probe and its cached status."""
+"""yucode 更新检查:后台 PyPI 版本探测及其缓存状态。"""
 
 from __future__ import annotations
 
@@ -12,9 +12,9 @@ from urllib.request import Request, urlopen
 
 from yucode.base import (
     HTTP_USER_AGENT,
-    YucodeError,
     Text,
     UpdateStatus,
+    YucodeError,
     __version__,
 )
 from yucode.session import Session
@@ -24,7 +24,7 @@ class UpdateChecker:
     PYPI_URL = "https://pypi.org/pypi/yucode/json"
     CACHE_FILE = "update.json"
     TIMEOUT = 5
-    INTERVAL_SECONDS = 24 * 3600
+    INTERVAL_SECONDS = 24 * 3600  # 两次探测之间的最小间隔:24 小时
 
     def __init__(self, session: Session):
         self.session = session
@@ -42,7 +42,7 @@ class UpdateChecker:
         try:
             self.session.update.latest = self.fetch_latest()
             self.session.update.error = ""
-        except Exception as error:  # noqa: BLE001 - background update failures must not escape the worker.
+        except Exception as error:  # noqa: BLE001 - 后台更新失败不得逃出工作线程。
             self.session.update.error = Text.clean(str(error))
         finally:
             self.session.update.checking = False
@@ -85,7 +85,7 @@ class UpdateChecker:
 
     @staticmethod
     def upgrade_command() -> list[str]:
-        """Best-effort package-manager command to upgrade yucode, based on how it was installed."""
+        """尽力给出升级 yucode 的包管理器命令,依据其安装方式推断。"""
         executable = os.path.realpath(sys.executable).replace(os.sep, "/")
         if "/uv/tools/" in executable:
             return ["uv", "tool", "upgrade", "yucode"]

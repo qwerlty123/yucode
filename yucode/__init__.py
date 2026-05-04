@@ -1,4 +1,4 @@
-"""A small terminal coding agent."""
+"""一个小巧的终端编码代理。"""
 
 from yucode.base import __version__
 

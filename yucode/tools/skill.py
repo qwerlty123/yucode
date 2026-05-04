@@ -1,4 +1,4 @@
-"""Skill tool: loading an installed skill's full instructions on demand."""
+"""Skill 工具:按需加载已安装技能的完整指令。"""
 
 from __future__ import annotations
 

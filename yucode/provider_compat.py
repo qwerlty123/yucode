@@ -1,7 +1,7 @@
-"""Compile provider/model catalog data and resolve protocol compatibility.
+"""编译供应商/模型目录数据并解析协议兼容性。
 
-The catalog describes documented host/model differences. This module applies generic matching and
-effort fallback; Chat, Responses, and Anthropic paths remain responsible for their wire formats.
+目录描述记录在案的主机/模型差异。本模块负责通用匹配与 effort 回退;
+Chat、Responses 与 Anthropic 路径仍各自负责自己的线格式。
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ from yucode.model_catalog import (
 
 @dataclass(frozen=True)
 class ModelMatch:
-    """The model selector every catalog rule shares: family prefixes or a documented pattern."""
+    """所有目录规则共用的模型选择器:家族前缀或记录在案的模式。"""
 
     prefixes: tuple[str, ...] = ()
     pattern: str = ""
@@ -36,21 +36,21 @@ class ModelMatch:
 
 @dataclass(frozen=True)
 class ModelRule(ModelMatch):
-    """A value selected by model-family prefixes or a documented version pattern."""
+    """由模型家族前缀或记录在案的版本模式选出的值。"""
 
     value: str = ""
 
 
 @dataclass(frozen=True)
 class ModelEffortRule(ModelMatch):
-    """Supported normalized efforts selected by model family."""
+    """按模型家族选择的受支持的规范化 effort。"""
 
     levels: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
 class CompatibilityProfile:
-    """Only the documented ways a host differs from generic protocol behavior."""
+    """仅记录主机与通用协议行为的差异之处。"""
 
     api_rules: tuple[ModelRule, ...] = ()
     chat_reasoning: str | None = None
@@ -67,9 +67,8 @@ class CompatibilityProfile:
     strict_beta: bool = False
     suppress_temperature: bool = False
     suppress_temperature_models: tuple[str, ...] = ()
-    # Provider-side tool policy: which resolved wires may carry which provider-native JSON
-    # subsets. ``None`` keeps generic pass-through for unknown hosts; an empty mapping means no
-    # wire accepts tools.
+    # 供应商侧工具策略:哪些解析出的线协议可以承载哪些供应商原生 JSON 子集。
+    # ``None`` 表示未知主机保持通用透传;空映射表示没有任何线协议接受工具。
     builtin_tools_by_wire: dict[str, tuple[BuiltinToolRuleData, ...]] | None = None
 
     @staticmethod
@@ -83,7 +82,7 @@ class CompatibilityProfile:
 
 @dataclass(frozen=True)
 class ResolvedProvider:
-    """The effective transport policy after explicit config and compatibility are folded."""
+    """显式配置与兼容性折叠后生效的传输策略。"""
 
     api: str
     base_url: str
@@ -100,7 +99,7 @@ class ResolvedProvider:
 
 @dataclass(frozen=True)
 class BuiltinToolsIssue:
-    """One known-provider incompatibility, ready for request and command feedback."""
+    """一条已知供应商不兼容项,可直接用于请求与命令反馈。"""
 
     reason: Literal["wire", "entry"]
     configured: tuple[str, ...]
@@ -126,7 +125,7 @@ def _builtin_tool_label(entry: Mapping[str, object]) -> str:
 
 
 def _matches_builtin_tool_rule(entry: Mapping[str, object], rule: Mapping[str, object]) -> bool:
-    """Whether entry contains every literal or nested field required by a catalog rule."""
+    """判断 entry 是否包含目录规则要求的每个字面量或嵌套字段。"""
 
     for key, expected in rule.items():
         if key not in entry:
@@ -141,7 +140,7 @@ def _matches_builtin_tool_rule(entry: Mapping[str, object], rule: Mapping[str, o
 
 
 def builtin_tools_issue(resolved: ResolvedProvider, entries: tuple[Mapping[str, object], ...]) -> BuiltinToolsIssue | None:
-    """Return the known compatibility problem, while leaving unknown hosts on pass-through."""
+    """返回已知的兼容性问题,未知主机则保持透传。"""
 
     policy = resolved.builtin_tools_by_wire
     if policy is None or not entries:
@@ -157,7 +156,7 @@ def builtin_tools_issue(resolved: ResolvedProvider, entries: tuple[Mapping[str, 
 
 
 def nearest_reasoning_effort(effort: str, supported: tuple[str, ...]) -> str:
-    """Return the closest supported normalized effort, preferring the higher level on a tie."""
+    """返回最接近的受支持规范化 effort,并列时偏向更高一级。"""
 
     if effort not in REASONING_LEVELS:
         return effort
@@ -199,7 +198,7 @@ def _capability_effort_rules(data: ProviderData) -> tuple[tuple[ModelEffortRuleD
 
 
 def _compatibility_profile(data: ProviderData) -> CompatibilityProfile:
-    """Compile one provider overlay and its reusable model capability sets."""
+    """编译单个供应商覆盖层及其可复用的模型能力集合。"""
 
     return CompatibilityProfile(
         api_rules=_model_rules(data.get("api_rules", ()), *_capability_model_rules(data, "api_rules")),
@@ -240,7 +239,7 @@ _FAMILY_SPLIT_RE = re.compile(r"[^0-9a-z]+")
 
 
 def anthropic_model_version(model: str) -> tuple[int, int] | None:
-    """Return the first short numeric generation in a Claude model id, if present."""
+    """返回 Claude 模型 ID 中第一个短数字代数(若有)。"""
 
     tokens = [token for token in _FAMILY_SPLIT_RE.split(model.lower()) if token]
     for index, token in enumerate(tokens):
@@ -253,15 +252,15 @@ def anthropic_model_version(model: str) -> tuple[int, int] | None:
 
 
 def anthropic_thinking_params(model: str, reasoning: str, effort: str, budget_tokens: int) -> dict[str, object]:
-    """Build the documented thinking fields for a known Claude generation.
+    """为已知的 Claude 代际构造记录在案的 thinking 字段。
 
-    Unknown aliases remain unconfigured. A gateway may point such a name at either side of the
-    adaptive-thinking boundary, and guessing would turn a valid alias into a 400 response.
+    未知别名保持不配置。网关可能把这类名称指向自适应思考边界的任一侧,
+    而猜测会把一个有效别名变成 400 响应。
     """
 
-    # Why: 4.5 and earlier require manual thinking; 4.6 recommends adaptive; 4.7+ rejects
-    # manual thinking. Opus 4.5 uniquely combines manual thinking with output_config.effort.
-    # Evidence: https://platform.claude.com/docs/en/build-with-claude/extended-thinking
+    # 为什么:4.5 及更早要求手动 thinking;4.6 推荐 adaptive;4.7+ 拒绝手动 thinking。
+    # Opus 4.5 是唯一将手动 thinking 与 output_config.effort 结合的模型。
+    # 依据:https://platform.claude.com/docs/en/build-with-claude/extended-thinking
     #           https://platform.claude.com/docs/en/build-with-claude/effort
     version = anthropic_model_version(model)
     if version is None:
@@ -288,12 +287,12 @@ def anthropic_thinking_always_on(model: str) -> bool:
 
 
 def anthropic_keeps_prior_thinking(model: str) -> bool:
-    """Whether Claude keeps earlier turns' thinking in its effective context."""
+    """Claude 是否在其有效上下文中保留此前轮次的思考。"""
 
-    # Opus 4.5 and all numbered 4.6+ models preserve and bill all prior thinking. Sonnet/Haiku
-    # 4.5 and earlier models keep only the latest turn; unknown aliases stay conservative.
-    # Current-turn thinking blocks are required for tool use regardless of this distinction.
-    # Evidence: https://platform.claude.com/docs/en/build-with-claude/thinking
+    # Opus 4.5 及所有带编号的 4.6+ 模型保留并计费全部历史思考。Sonnet/Haiku 4.5
+    # 及更早的模型只保留最新一轮;未知别名保持保守处理。
+    # 无论此区别如何,当前轮次的 thinking 块都是工具使用所必需的。
+    # 依据:https://platform.claude.com/docs/en/build-with-claude/thinking
     version = anthropic_model_version(model)
     if version is None:
         return True
@@ -302,7 +301,7 @@ def anthropic_keeps_prior_thinking(model: str) -> bool:
 
 
 def compatibility_for_host(host: str, profiles: Mapping[str, CompatibilityProfile] = COMPATIBILITY_PROFILES) -> CompatibilityProfile:
-    """Return the most specific domain profile while respecting label boundaries."""
+    """在尊重标签边界的前提下返回最具体的域名档案。"""
 
     matches = ((domain, profile) for domain, profile in profiles.items() if host == domain or host.endswith(f".{domain}"))
     return max(matches, key=lambda item: len(item[0]), default=("", CompatibilityProfile()))[1]

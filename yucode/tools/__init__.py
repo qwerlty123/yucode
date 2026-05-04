@@ -1,4 +1,4 @@
-"""yucode tools: the built-in tool set exposed to the model."""
+"""yucode 工具:暴露给模型的内置工具集。"""
 
 from __future__ import annotations
 

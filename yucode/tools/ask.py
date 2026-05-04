@@ -1,4 +1,4 @@
-"""Ask tool: structured multiple-choice questions for the user."""
+"""Ask 工具:向用户提出结构化的选择题。"""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from yucode.tools.base import Tool
 
 @dataclass(frozen=True)
 class AskSpec:
-    """One validated question the model wants to ask the user."""
+    """模型想向用户提出的一个已校验问题。"""
 
     question: str
     choices: list[str] | None = None
@@ -54,8 +54,8 @@ class AskTool(Tool):
         questions = self.single_dict_arg(f"{self.NAME} requires named fields").get("questions")
         if not isinstance(questions, list) or not questions:
             raise ToolError(f"{self.NAME} requires a non-empty 'questions' list")
-        # Validate the whole batch up front, so a malformed later question never strands the
-        # user after they have already answered earlier ones.
+        # 先整体校验整批问题,避免后面某条问题格式错误时,
+        # 用户已经回答了前面的问题却被卡住。
         prepared: list[AskSpec] = []
         for item in questions:
             if not isinstance(item, dict):

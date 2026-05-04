@@ -1,4 +1,4 @@
-"""Memory tools: history recall, context recall, and durable notes."""
+"""记忆工具:历史回忆、上下文回忆与持久笔记。"""
 
 from __future__ import annotations
 
@@ -261,8 +261,8 @@ class NoteTool(Tool):
     MUTATES = True
 
     def needs_confirmation(self) -> bool:
-        # MUTATES serializes Note with other state edits; working-note changes do not need user
-        # confirmation because they are reversible session metadata, not workspace writes.
+        # MUTATES 使 Note 与其他状态编辑一起序列化;工作笔记的更改不需要用户确认,
+        # 因为它们是可逆的会话元数据,而非工作区写入。
         return False
 
     @classmethod

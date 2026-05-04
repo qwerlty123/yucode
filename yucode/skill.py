@@ -1,4 +1,4 @@
-"""yucode skills: Markdown instruction packs loaded on demand."""
+"""yucode 技能:按需加载的 Markdown 指令包。"""
 
 from __future__ import annotations
 
@@ -17,15 +17,15 @@ class Skill:
     description: str
     body: str
     dir: str
-    source: str  # "builtin", "user", or "project"
+    source: str  # "builtin"、"user" 或 "project"
 
 
 class SkillLibrary:
-    """Skills discovered from builtin, user, and project skill directories.
+    """从内置、用户和项目技能目录中发现技能。
 
-    Each skill is a Markdown file with `name`/`description` frontmatter; the index (name + description)
-    rides the cache-stable prefix so the model knows what exists, and the full body is pulled into the
-    conversation only when the model calls Skill(name) or the user references it with `$name`."""
+    每个技能都是一个带 `name`/`description` frontmatter 的 Markdown 文件;索引(name + description)
+    随缓存稳定的前缀一起发送,让模型知道有哪些技能;只有当模型调用 Skill(name) 或用户以 `$name`
+    引用某个技能时,其完整正文才会被拉入对话。"""
 
     FRONTMATTER = re.compile(r"^---\n(.*?)\n---\n?(.*)$", re.DOTALL)
     META_LINE = re.compile(r"^([A-Za-z0-9_-]+):[ \t]*(.*)$", re.MULTILINE)
@@ -37,8 +37,7 @@ class SkillLibrary:
     @classmethod
     def load(cls, session: Session) -> SkillLibrary:
         skills: dict[str, Skill] = {}
-        # Later roots override earlier ones: projects can customize user skills, and users can
-        # customize the read-only skills shipped with yucode.
+        # 后面的根目录覆盖前面的:项目可以定制用户技能,用户也可以定制 yucode 自带的只读技能。
         builtin_skills = os.path.join(os.path.dirname(__file__), "builtin_skills")
         project_skills = os.path.join(session.cwd, ".yucode", "skills")
         if not os.path.isdir(project_skills):
@@ -65,8 +64,8 @@ class SkillLibrary:
                 text = handle.read()
         except OSError:
             return None
-        # Normalize BOM and CRLF/CR so the frontmatter regex (which keys on "\n") matches files
-        # authored on any platform; we only read two simple scalars, so this stays regex-light.
+        # 规范化 BOM 与 CRLF/CR,使依赖 "\n" 的 frontmatter 正则能匹配任何平台编写的文件;
+        # 这里只读取两个简单标量,因此保持轻量正则即可。
         text = text.lstrip("﻿").replace("\r\n", "\n").replace("\r", "\n")
         match = cls.FRONTMATTER.match(text)
         meta, body = (match.group(1), match.group(2)) if match else ("", text)
@@ -93,7 +92,7 @@ class SkillLibrary:
         return self.skills.get(resolved) if resolved else None
 
     def expand(self, skill: Skill) -> str:
-        return skill.body.replace("{skill_dir}", skill.dir).replace("${SKILL_DIR}", skill.dir)
+        return skill.body.replace("{skill_dir}", skill.dir).replace("${SKILL_DIR}", skill.dir)  # 展开技能目录占位符
 
     def index(self) -> str:
         if not self.skills:
