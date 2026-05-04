@@ -9,8 +9,8 @@ import httpx
 from anthropic import Anthropic
 from openai import OpenAI
 
-from minacode.base import Config, ProviderConfig
-from minacode.session import Session
+from yucode.base import Config, ProviderConfig
+from yucode.session import Session
 
 
 class _MockClientFactory:

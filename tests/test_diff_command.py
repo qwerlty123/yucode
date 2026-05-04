@@ -4,14 +4,14 @@ import subprocess
 import sys
 import time
 
-from minacode.base import Config, ToolCall
-from minacode.context import ContextManager
-from minacode.engine import Agent
-from minacode.loop import CommandLoop
-from minacode.render import UiPrinter
-from minacode.runner import ToolRunner
-from minacode.session import Session, SessionSnapshotStore, TurnDiff
-from minacode.tui import DiffViewState, TabbedViewState
+from yucode.base import Config, ToolCall
+from yucode.context import ContextManager
+from yucode.engine import Agent
+from yucode.loop import CommandLoop
+from yucode.render import UiPrinter
+from yucode.runner import ToolRunner
+from yucode.session import Session, SessionSnapshotStore, TurnDiff
+from yucode.tui import DiffViewState, TabbedViewState
 
 
 def session(tmp_path):
@@ -46,7 +46,7 @@ def test_diff_preserves_cli_history_when_tmux_alternate_screen_is_off(tmp_path):
     executable = shutil.which("tmux")
     if executable is None:
         return
-    socket = "minacode-test-" + tmp_path.name
+    socket = "yucode-test-" + tmp_path.name
     command = [executable, "-L", socket]
     probe = tmp_path / "diff_tmux_probe.py"
     probe.write_text(
@@ -54,11 +54,11 @@ def test_diff_preserves_cli_history_when_tmux_alternate_screen_is_off(tmp_path):
 import threading
 import time
 
-from minacode.base import Config
-from minacode.engine import Agent
-from minacode.loop import CommandLoop
-from minacode.session import Session
-from minacode.tui import TuiApp
+from yucode.base import Config
+from yucode.engine import Agent
+from yucode.loop import CommandLoop
+from yucode.session import Session
+from yucode.tui import TuiApp
 
 session = Session(cwd="/tmp", config=Config(data_dir=tempfile.mkdtemp()))
 session.store_turn_diff("tr.1", 1, "a.py", "-old\\n+new\\n", round=1)
@@ -102,13 +102,13 @@ def test_alternate_screen_probe_reads_the_resolved_window_option(tmp_path):
     executable = shutil.which("tmux")
     if executable is None:
         return
-    socket = "minacode-test-probe-" + tmp_path.name
+    socket = "yucode-test-probe-" + tmp_path.name
     command = [executable, "-L", socket]
     probe = tmp_path / "alternate_screen_probe.py"
     probe.write_text(
         f"""import subprocess
 
-from minacode.tui import TuiApp
+from yucode.tui import TuiApp
 
 print(TuiApp.alternate_screen_available())
 subprocess.run([{executable!r}, "set-option", "-wg", "alternate-screen", "off"], check=True)

@@ -1,7 +1,7 @@
-<h1 align="center">minacode</h1>
+<h1 align="center">yucode</h1>
 
 <p align="center">
-  <img src="snapshots/minacode1.gif" alt="minacode editing code and running tools" width="600">
+  <img src="snapshots/yucode1.gif" alt="yucode editing code and running tools" width="600">
 </p>
 
 <p align="center">
@@ -12,18 +12,18 @@
 
 ## Safety
 
-**Use at your own risk.** minacode can edit files and run shell commands in the environment where it starts. It does not provide sandbox isolation; use a container or VM when needed.
+**Use at your own risk.** yucode can edit files and run shell commands in the environment where it starts. It does not provide sandbox isolation; use a container or VM when needed.
 
 ## What it is
 
-minacode does not introduce a new kind of coding agent. It combines familiar features — reading and editing files, running commands, follow-ups, sessions, diffs, MCP, and skills — into a tool I use personally.
+yucode does not introduce a new kind of coding agent. It combines familiar features — reading and editing files, running commands, follow-ups, sessions, diffs, MCP, and skills — into a tool I use personally.
 
-It works on real repositories, including its own: I use minacode to build and maintain minacode. Everything ships in a small, focused Python package, so I can change the behavior directly whenever I want the workflow to work differently.
+It works on real repositories, including its own: I use yucode to build and maintain yucode. Everything ships in a small, focused Python package, so I can change the behavior directly whenever I want the workflow to work differently.
 
-minacode is the former nanocode. It started as a single-file agent small enough to be called *nano*, but has since grown beyond a single file, so it now goes by minacode.
+yucode was formerly minacode (and nanocode before that). It started as a single-file agent small enough to be called *nano*; it has since grown beyond a single file, and now goes by yucode.
 
 <p align="center">
-  <img src="snapshots/minacode2.gif" alt="minacode resuming a saved session" width="600">
+  <img src="snapshots/yucode2.gif" alt="yucode resuming a saved session" width="600">
 </p>
 <p align="center"><sub>Resuming a saved session with its conversation and tool history.</sub></p>
 
@@ -44,11 +44,11 @@ minacode is the former nanocode. It started as a single-file agent small enough 
 Requires macOS or Linux, Python 3.11+, and [uv](https://docs.astral.sh/uv/).
 
 ```sh
-uv tool install minacode
-minacode --init-config
+uv tool install yucode
+yucode --init-config
 ```
 
-Add your provider to `~/.minacode/config.toml`:
+Add your provider to `~/.yucode/config.toml`:
 
 ```toml
 [provider]
@@ -63,13 +63,13 @@ model = "deepseek-v4-flash"
 Then run:
 
 ```sh
-minacode
+yucode
 ```
 
-Upgrade with `uv tool upgrade minacode`.
+Upgrade with `uv tool upgrade yucode`.
 
 ## Links
 
-- [Documentation](https://minacode.readthedocs.io/en/latest/) — full usage guide and reference.
+- [Documentation](https://github.com/qwerlty123/yucode) — full usage guide and reference.
 - [Blog post](https://hit9.dev/post/nanocode) — why and how it was built.
-- [code-symbol-index](https://github.com/hit9/code-symbol-index) — the code index library minacode uses.
+- [code-symbol-index](https://github.com/hit9/code-symbol-index) — the code index library yucode uses.

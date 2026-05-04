@@ -6,7 +6,7 @@ import pytest
 from agent_harness import session as agent_session
 from model_harness import _AnthropicMockClientFactory, _AnthropicStreamClientFactory, _MockClientFactory, _session, _StreamClientFactory
 
-from minacode.base import (
+from yucode.base import (
     PAUSED_TURN_KEY,
     SEARCH_SOURCES_KEY,
     ConfigError,
@@ -16,12 +16,12 @@ from minacode.base import (
     ToolCall,
     builtin_tool_label,
 )
-from minacode.context import ContextManager
-from minacode.engine import Agent
-from minacode.model import ModelClient
-from minacode.render import search_sources_footer
-from minacode.runner import ToolRunner
-from minacode.skill import SkillLibrary
+from yucode.context import ContextManager
+from yucode.engine import Agent
+from yucode.model import ModelClient
+from yucode.render import search_sources_footer
+from yucode.runner import ToolRunner
+from yucode.skill import SkillLibrary
 
 WEB_SEARCH = {"type": "web_search"}
 FUNCTION_TOOL = {

@@ -6,10 +6,10 @@ from types import SimpleNamespace
 import code_symbol_index as csi
 import pytest
 
-import minacode.__main__ as cli
-import minacode.update as update_module
-from minacode.__main__ import main
-from minacode.base import (
+import yucode.__main__ as cli
+import yucode.update as update_module
+from yucode.__main__ import main
+from yucode.base import (
     ANTHROPIC_DEFAULT_MAX_TOKENS,
     CHAT_REASONING_CHOICES,
     DEFAULT_MAX_TOKENS,
@@ -27,15 +27,15 @@ from minacode.base import (
     UpdateStatus,
     __version__,
 )
-from minacode.context import ContextManager
-from minacode.engine import Agent
-from minacode.loop import CommandLoop
-from minacode.model import ModelClient
-from minacode.render import StatusBar
-from minacode.runner import ToolRunner
-from minacode.session import Session, SessionSnapshotStore
-from minacode.tools import TOOL_REGISTRY, CodeIndex, Tool
-from minacode.update import UpdateChecker
+from yucode.context import ContextManager
+from yucode.engine import Agent
+from yucode.loop import CommandLoop
+from yucode.model import ModelClient
+from yucode.render import StatusBar
+from yucode.runner import ToolRunner
+from yucode.session import Session, SessionSnapshotStore
+from yucode.tools import TOOL_REGISTRY, CodeIndex, Tool
+from yucode.update import UpdateChecker
 
 
 def session(tmp_path):
@@ -752,7 +752,7 @@ def test_kimi_compatibility_uses_model_native_reasoning_controls(tmp_path):
     assert resolved.chat_reasoning == "reasoning_effort"
     assert resolved.prompt_cache_key is True
     assert resolved.chat_reasoning_history == "all"
-    assert client.prompt_cache_key(provider, None).startswith("minacode-")
+    assert client.prompt_cache_key(provider, None).startswith("yucode-")
 
     params = {}
     client.apply_provider_params(params, provider)
@@ -795,7 +795,7 @@ def test_kimi_code_compatibility_is_distinct_from_open_platform(tmp_path):
     assert resolved.chat_reasoning == "reasoning_effort"
     assert resolved.prompt_cache_key is True
     assert resolved.chat_reasoning_history == "all"
-    assert client.prompt_cache_key(provider, None).startswith("minacode-")
+    assert client.prompt_cache_key(provider, None).startswith("yucode-")
 
     params = {}
     client.apply_provider_params(params, provider)
@@ -912,12 +912,12 @@ def test_chat_provider_extra_body_passthrough(tmp_path):
     client.apply_provider_params(params, provider)
     assert params["extra_body"] == search
 
-    # Configured extra_body merges with minacode-managed reasoning fields...
+    # Configured extra_body merges with yucode-managed reasoning fields...
     params = {}
     client.apply_provider_params(params, ProviderConfig(url="https://openrouter.ai/api/v1", model="x", reasoning="high", extra_body={"enable_search": True}))
     assert params["extra_body"] == {"enable_search": True, "reasoning": {"effort": "high"}}
 
-    # ...and reasoning wins on key conflict so minacode stays in control of its own fields.
+    # ...and reasoning wins on key conflict so yucode stays in control of its own fields.
     params = {}
     client.apply_provider_params(
         params, ProviderConfig(url="https://openrouter.ai/api/v1", model="x", reasoning="high", extra_body={"reasoning": {"effort": "low"}})
@@ -1355,13 +1355,13 @@ def test_start_session_announces_detected_upgrade_command(tmp_path, monkeypatch)
     s.update.latest = "999.0.0"
     emitted = []
     monkeypatch.setattr(UpdateChecker, "start", lambda _checker: None)
-    monkeypatch.setattr(UpdateChecker, "upgrade_command", lambda: ["uv", "tool", "upgrade", "minacode"])
+    monkeypatch.setattr(UpdateChecker, "upgrade_command", lambda: ["uv", "tool", "upgrade", "yucode"])
     monkeypatch.setattr(SessionSnapshotStore, "clean_expired", lambda _session: 0)
     monkeypatch.setattr(CodeIndex, "refresh_existing_async", lambda _index: False)
 
     CommandLoop(Agent(s), input_fn=lambda _: "", output_fn=emitted.append).start_session()
 
-    assert any("upgrade with `uv tool upgrade minacode`" in line for line in emitted)
+    assert any("upgrade with `uv tool upgrade yucode`" in line for line in emitted)
 
 
 def test_tool_runner_unknown_tool_records_concise_error(tmp_path):

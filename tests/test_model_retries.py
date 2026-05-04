@@ -6,9 +6,9 @@ import time
 import pytest
 from model_harness import _MockClientFactory, _session
 
-import minacode.model as model_module
-from minacode.base import ModelError, ModelResponseTimeout
-from minacode.model import ModelClient
+import yucode.model as model_module
+from yucode.base import ModelError, ModelResponseTimeout
+from yucode.model import ModelClient
 
 
 def test_compaction_does_not_publish_internal_model_output(tmp_path, monkeypatch):

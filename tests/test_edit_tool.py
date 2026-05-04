@@ -4,13 +4,13 @@ import shutil
 import pytest
 from prompt_toolkit.utils import get_cwidth
 
-from minacode.base import LogBlock, LogEdge, LogLine, LogRole, ToolCall, ToolError
-from minacode.context import ContextManager
-from minacode.model import ModelClient
-from minacode.render import UiPrinter
-from minacode.runner import EditBatchPlan, ToolRunner
-from minacode.session import Session
-from minacode.tools import CodeIndex, EditTool, ReadTool
+from yucode.base import LogBlock, LogEdge, LogLine, LogRole, ToolCall, ToolError
+from yucode.context import ContextManager
+from yucode.model import ModelClient
+from yucode.render import UiPrinter
+from yucode.runner import EditBatchPlan, ToolRunner
+from yucode.session import Session
+from yucode.tools import CodeIndex, EditTool, ReadTool
 
 
 def session(tmp_path):

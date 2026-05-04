@@ -1,11 +1,11 @@
 # SOME DESCRIPTIVE TITLE.
 # Copyright (C) hit9
-# This file is distributed under the same license as the minacode package.
+# This file is distributed under the same license as the yucode package.
 # FIRST AUTHOR <EMAIL@ADDRESS>, 2026.
 #
 msgid ""
 msgstr ""
-"Project-Id-Version: minacode 0.9\n"
+"Project-Id-Version: yucode 0.9\n"
 "Report-Msgid-Bugs-To: \n"
 "POT-Creation-Date: 2026-07-19 02:56-0700\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
@@ -46,31 +46,31 @@ msgstr "每个 skill 是一个包含 `SKILL.md` 的目录。文件 frontmatter �
 
 #: ../../skills.md:32
 msgid ""
-"minacode only sees the `name` and `description` until the skill is used — the full body loads on "
+"yucode only sees the `name` and `description` until the skill is used — the full body loads on "
 "demand."
-msgstr "使用 skill 前，minacode 只会看到它的 `name` 和 `description`；正文会按需加载。"
+msgstr "使用 skill 前，yucode 只会看到它的 `name` 和 `description`；正文会按需加载。"
 
 #: ../../skills.md:35
 msgid "Where skills come from"
 msgstr "Skill 的来源"
 
 #: ../../skills.md:37
-msgid "minacode discovers skills from three sources:"
-msgstr "minacode 从三类来源发现 skill："
+msgid "yucode discovers skills from three sources:"
+msgstr "yucode 从三类来源发现 skill："
 
 #: ../../skills.md:39
-msgid "Builtin skills shipped with minacode"
-msgstr "随 minacode 分发的内置 skill"
+msgid "Builtin skills shipped with yucode"
+msgstr "随 yucode 分发的内置 skill"
 
 #: ../../skills.md:40
-msgid "`.minacode/skills/` — project-local, checked in with the repo"
-msgstr "`.minacode/skills/` — 项目级 skill，可随仓库提交"
+msgid "`.yucode/skills/` — project-local, checked in with the repo"
+msgstr "`.yucode/skills/` — 项目级 skill，可随仓库提交"
 
 #: ../../skills.md:41
 msgid ""
-"`~/.minacode/skills/` — your personal skills, available everywhere (under `<data_dir>/skills/` "
+"`~/.yucode/skills/` — your personal skills, available everywhere (under `<data_dir>/skills/` "
 "when `paths.data_dir` is customized)"
-msgstr "`~/.minacode/skills/` — 个人 skill，在所有项目中可用；自定义 `paths.data_dir` 后位于 `<data_dir>/skills/`"
+msgstr "`~/.yucode/skills/` — 个人 skill，在所有项目中可用；自定义 `paths.data_dir` 后位于 `<data_dir>/skills/`"
 
 #: ../../skills.md:44
 msgid ""
@@ -80,22 +80,22 @@ msgstr "名称冲突时，项目 skill 会覆盖用户 skill，用户 skill 会�
 
 #: ../../skills.md:47
 msgid ""
-"Every installation includes **`minacode-help`**, a compact manual for installation, configuration, "
+"Every installation includes **`yucode-help`**, a compact manual for installation, configuration, "
 "providers, commands, sessions, tools, safety, and troubleshooting. The agent can load it when a "
-"question concerns minacode, or you can request it explicitly with `$minacode-help`. If the manual "
+"question concerns yucode, or you can request it explicitly with `$yucode-help`. If the manual "
 "does not settle the question, it directs the agent to inspect the matching version's source code "
 "and tests."
 msgstr ""
-"每个 minacode 安装都包含 **`minacode-help`**，这是一份涵盖安装、配置、provider、命令、会话、工具、安全和故障排查的精简手册。"
-"遇到 minacode 相关问题时，agent 可以自行加载它；你也可以用 `$minacode-help` 显式请求。如果手册仍无法解答，它会引导 agent 检查对应版本的源代码和测试。"
+"每个 yucode 安装都包含 **`yucode-help`**，这是一份涵盖安装、配置、provider、命令、会话、工具、安全和故障排查的精简手册。"
+"遇到 yucode 相关问题时，agent 可以自行加载它；你也可以用 `$yucode-help` 显式请求。如果手册仍无法解答，它会引导 agent 检查对应版本的源代码和测试。"
 
 #: ../../skills.md:53
 msgid "Using skills"
 msgstr "使用 skill"
 
 #: ../../skills.md:48
-msgid "**On demand** — minacode loads a skill itself when it's relevant to your request."
-msgstr "**按需加载** — 当请求与某个 skill 相关时，minacode 会自行加载。"
+msgid "**On demand** — yucode loads a skill itself when it's relevant to your request."
+msgstr "**按需加载** — 当请求与某个 skill 相关时，yucode 会自行加载。"
 
 #: ../../skills.md:49
 msgid ""

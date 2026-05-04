@@ -4,6 +4,11 @@
 ## Unreleased
 
 ### Changed
+- Renamed the project from `minacode` to `yucode`: the package and import (`import yucode`), the
+  `yucode` console script and `python -m yucode`, and the PyPI distribution (`yucode`, formerly
+  `minacode`, originally `nanocode-cli`). The data dir moved from `~/.minacode` to `~/.yucode`;
+  when the new directory is absent the old one is still read, so existing sessions, skills, and
+  config keep working without a migration step.
 - Reword the Edit `start`/`end` anchor parameter descriptions: the anchor must be the exact current
   `line:hash` value copied verbatim from Read, Search, or InspectCode, never invented or calculated,
   and re-read after any file change or stale-anchor error. The old wording only named the format and
@@ -82,8 +87,8 @@
 ## 0.19.0 - 2026-08-02
 
 ### Added
-- Ship a builtin `minacode-help` skill with an offline manual, troubleshooting guidance, a
-  matching-version source inspection fallback, and an idle hint inviting minacode questions.
+- Ship a builtin `yucode-help` skill with an offline manual, troubleshooting guidance, a
+  matching-version source inspection fallback, and an idle hint inviting yucode questions.
   Builtin skills use the same discovery and loading path as ordinary skills; user and project
   skills can override them by name.
 - Add `max` reasoning effort and map normalized effort levels to each documented provider/model
@@ -307,7 +312,7 @@
 
 ### Fixed
 - Reinforce the user's response language at the latest-user request boundary on every model step, including visible reasoning and progress, without rewriting stored session history.
-- Preserve OpenRouter's `reasoning`, `reasoning_content`, and structured `reasoning_details` in both streaming and non-streaming Chat responses, and retain nested `thinking.keep` or `thinking.clear_thinking` settings when minacode adds its managed thinking mode.
+- Preserve OpenRouter's `reasoning`, `reasoning_content`, and structured `reasoning_details` in both streaming and non-streaming Chat responses, and retain nested `thinking.keep` or `thinking.clear_thinking` settings when yucode adds its managed thinking mode.
 - Allow `Edit create` in an existing directory outside the workspace while still refusing to create missing external parent directories implicitly. The error now tells the agent to create such a directory with an approved `Bash mkdir`, and Bash's tool description clarifies that commands start in the workspace rather than being confined to it.
 - Move follow-ups already sent in the active request above the working divider while retaining them internally for safe retry, keep only unsent input in the queue region, and let recalled-input retries return to the normal `retrying`, `thinking`, and `responding` states instead of leaving a stale `revising queued input` label.
 
@@ -315,7 +320,7 @@
 ## 0.13.0 - 2026-07-26
 
 ### Added
-- Add top-level `minacode update` and `minacode upgrade` commands that check PyPI and use the detected installer (`uv tool`, `pipx`, or `pip`) when an upgrade is available; startup hints now show the same command.
+- Add top-level `yucode update` and `yucode upgrade` commands that check PyPI and use the detected installer (`uv tool`, `pipx`, or `pip`) when an upgrade is available; startup hints now show the same command.
 - Stream reasoning and answer text by default over OpenAI-compatible Chat Completions, OpenAI Responses, and Anthropic Messages. The running TUI now distinguishes `thinking` from `responding` while preserving the completed Rich transcript, tool-call replay, usage accounting, cancellation, and retry behavior.
 - Add the generic `provider.stream` setting, enabled by default and switchable for the current session with `/set provider.stream on|off`, so compatible endpoints that reject streaming or Chat `stream_options` retain a non-streaming path without provider specialization.
 - Accept local image paths directly in the interactive prompt, render recognized files as editable inline labels, preserve them across queued follow-ups and resumed sessions, and send the corresponding standard image content through OpenAI-compatible Chat, OpenAI Responses, and Anthropic Messages without provider- or model-name specialization.
@@ -335,7 +340,7 @@
 - Consolidate the small protocol-adaptation helpers into `provider_compat`, removing a thin module boundary while keeping provider-specific behavior isolated.
 - Split the terminal frontend into focused `loop`, `tui`, and `render` modules without adding forwarding layers or changing behavior.
 - Keep up to three lines from each completed Bash output stream in the transcript, with `Ctrl-O` offering a larger 24-line preview for recent commands.
-- Replace wildcard imports between minacode modules with explicit imports, and have Ruff reject any future `import *` usage.
+- Replace wildcard imports between yucode modules with explicit imports, and have Ruff reject any future `import *` usage.
 - Make `/status` context and prompt-cache usage immediately readable with compact progress bars, token counts, and percentages, while retaining its Rich table and hiding empty detail.
 - Lower the default provider request timeout from 180 seconds to 120 seconds; explicitly configured values are unchanged.
 - Increase transient model retries from two to five, and show attempts with concise reasons in the running TUI, such as `retrying 2/6 · timeout`, then keep `attempt 2/6` visible while the replacement request continues.
@@ -346,7 +351,7 @@
 - Add documented compatibility overrides for Kimi and Z.AI across their international and China endpoints. Kimi Code remains distinct from the open platform; both Z.AI regions share GLM-5.2+ `reasoning_effort`, Kimi keeps its documented `prompt_cache_key`, and Z.AI relies on automatic context caching.
 
 ### Fixed
-- Prevent models from narrating assumed tool failures and issuing speculative retries before minacode has executed their pending calls by making the tool-result boundary explicit in the system prompt.
+- Prevent models from narrating assumed tool failures and issuing speculative retries before yucode has executed their pending calls by making the tool-result boundary explicit in the system prompt.
 - Clear the transient thinking preview before printing `Cancelled`, so interrupted reasoning does not remain in terminal scrollback. Protocol-required reasoning data is still retained in the session.
 - Preserve image references when the simple CLI combines resumed queued inputs; joining their text previously left internal image markers without attachments and crashed before dispatch.
 - Reject an ambiguous streamed Chat tool-call fragment when a compatibility endpoint omits both `index` and `id`, instead of silently appending its arguments to the wrong parallel tool call.
@@ -377,7 +382,7 @@
 
 ### Fixed
 - Background jobs (`Job(start)`) now capture every stage of a compound command such as `configure && make && pytest`; previously only the final stage was logged and earlier output leaked to the terminal.
-- Opening the external editor no longer truncates a draft at a git-style scissors line you typed yourself — only the reference context minacode appends below its own marker is stripped.
+- Opening the external editor no longer truncates a draft at a git-style scissors line you typed yourself — only the reference context yucode appends below its own marker is stripped.
 
 
 ## 0.11.0 - 2026-07-20
@@ -387,7 +392,7 @@
 - Show a placeholder tip in the idle input while it is empty, picked at random for the session from a few shortcuts (`Ctrl-X Ctrl-E opens $EDITOR`, `Type / for commands`, `Ctrl-U clears the line`) so they stay discoverable without cluttering the prompt; it disappears as soon as you start typing and gives way to the queue hints while the agent runs.
 
 ### Changed
-- Renamed the project from `nanocode` to `minacode`: the package and import (`import minacode`), the `minacode` console script and `python -m minacode`, and the PyPI distribution (`minacode`, formerly `nanocode-cli`). The data dir moved from `~/.nanocode` to `~/.minacode`; when the new directory is absent the old one is still read, so existing sessions, skills, and config keep working without a migration step.
+- Renamed the project from `nanocode` to `minacode` (later renamed to `yucode`): the package and import (`import minacode`), the `minacode` console script and `python -m minacode`, and the PyPI distribution (`minacode`, formerly `nanocode-cli`). The data dir moved from `~/.nanocode` to `~/.minacode`; when the new directory is absent the old one is still read, so existing sessions, skills, and config keep working without a migration step.
 - Split the single `nanocode.py` module into a `minacode` package of focused submodules — `base`, `session`, `skill`, `mcp`, `tools`, `engine`, `tui` — plus a `__main__` entry module (so `python -m minacode` now works alongside the `minacode` console script), all re-exported through `minacode/__init__.py` so `import minacode` keeps exposing the same namespace as before. Module-internal helpers (`_read_and_release`, `_validate_edit_target`, `_resolved_tool_schemas`) are underscore-prefixed and gathered at the bottom of `tools.py`. Behavior, the CLI entry point, and the public API are otherwise unchanged; this reorganizes the source so it is easier to navigate and to trim optional features later.
 - Ask previews now ask for concrete graphic content (snippets, directory trees, file shapes) instead of restating the choice label, with the built-in example updated to match.
 

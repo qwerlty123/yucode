@@ -4,16 +4,16 @@ import time
 
 import pytest
 
-from minacode.base import SESSION_EVENT_KEY, Config, MinacodeError, RuntimeSettings
-from minacode.engine import Agent
-from minacode.loop import CommandLoop
-from minacode.prompts import LIVE_FOLLOWUP_PREFIX
-from minacode.model import ModelClient
-from minacode.session import HistorySegment, Session, SessionSnapshotCodec, SessionSnapshotStore, TurnDiff
+from yucode.base import SESSION_EVENT_KEY, Config, YucodeError, RuntimeSettings
+from yucode.engine import Agent
+from yucode.loop import CommandLoop
+from yucode.prompts import LIVE_FOLLOWUP_PREFIX
+from yucode.model import ModelClient
+from yucode.session import HistorySegment, Session, SessionSnapshotCodec, SessionSnapshotStore, TurnDiff
 
 
 def session_with_data_dir(tmp_path):
-    """Session targeting tmp_path as data_dir (avoids touching ~/.minacode)."""
+    """Session targeting tmp_path as data_dir (avoids touching ~/.yucode)."""
     return Session(
         cwd=str(tmp_path),
         config=Config(data_dir=str(tmp_path)),
@@ -394,7 +394,7 @@ def test_latest_never_crosses_into_another_project(tmp_path):
     elsewhere.messages.append({"role": "user", "content": "other"})
     elsewhere.save_snapshot()
 
-    with pytest.raises(MinacodeError, match="No previous session for this project"):
+    with pytest.raises(YucodeError, match="No previous session for this project"):
         Session.load_snapshot("latest", config=config, cwd=str(project))
 
 
@@ -430,7 +430,7 @@ def test_load_rejects_an_unknown_format_version(tmp_path):
     with open(log_path(s), "w") as file:
         file.write("\n".join(json.dumps(line) for line in lines) + "\n")
 
-    with pytest.raises(MinacodeError, match="Unsupported session format v99"):
+    with pytest.raises(YucodeError, match="Unsupported session format v99"):
         Session.load_snapshot(s.uid, config=s.config)
 
 
@@ -440,7 +440,7 @@ def test_load_appends_local_time_resume_event(tmp_path, monkeypatch):
     s.messages.append({"role": "user", "content": "hello"})
     s.save_snapshot()
 
-    monkeypatch.setattr("minacode.session.local_timestamp", lambda value=None: "2026-07-30T15:04:05+08:00")
+    monkeypatch.setattr("yucode.session.local_timestamp", lambda value=None: "2026-07-30T15:04:05+08:00")
     s2 = Session.load_snapshot(s.uid, config=s.config)
     assert len(s2.messages) == 2  # hello + resume marker
     assert s2.messages[-1] == {
@@ -583,7 +583,7 @@ def test_real_legacy_snapshot_without_layout_field_converts_numeric_local_time(t
         timestamp_calls.append(value)
         return "2023-11-14T17:13:20-05:00" if value is not None else "2026-07-30T15:04:05+08:00"
 
-    monkeypatch.setattr("minacode.session.local_timestamp", timestamp)
+    monkeypatch.setattr("yucode.session.local_timestamp", timestamp)
 
     loaded = Session.load_snapshot(s.uid, config=s.config)
 
@@ -723,15 +723,15 @@ def test_multiple_deltas_with_tool_calls(tmp_path):
 
 
 def test_load_missing_snapshot_raises_error(tmp_path):
-    """Loading a non-existent session raises MinacodeError."""
-    with pytest.raises(MinacodeError, match="Session snapshot not found"):
+    """Loading a non-existent session raises YucodeError."""
+    with pytest.raises(YucodeError, match="Session snapshot not found"):
         Session.load_snapshot("nonexistent-uid", config=Config(data_dir=str(tmp_path)))
 
 
 @pytest.mark.parametrize("alias", ["latest", "last"])
 def test_resolve_uid_without_a_project_session(tmp_path, alias):
-    """Resolving an alias in a project with no sessions raises MinacodeError."""
-    with pytest.raises(MinacodeError, match="No previous session for this project"):
+    """Resolving an alias in a project with no sessions raises YucodeError."""
+    with pytest.raises(YucodeError, match="No previous session for this project"):
         SessionSnapshotStore.resolve_uid(alias, str(tmp_path), str(tmp_path))
 
 
@@ -1065,7 +1065,7 @@ def test_session_name_does_not_change_when_goal_changes(tmp_path):
 
 
 def test_session_name_survives_compaction_dropping_the_opening_message(tmp_path):
-    from minacode.prompts import COMPACTION_SUMMARY_TITLE
+    from yucode.prompts import COMPACTION_SUMMARY_TITLE
 
     s = session_with_data_dir(tmp_path)
     s.messages.append({"role": "user", "content": "add a session picker"})
@@ -1167,7 +1167,7 @@ def test_ambiguous_resume_names_its_candidates(tmp_path):
     second.messages.append({"role": "user", "content": "rename the glow styles"})
     second.save_snapshot()
 
-    with pytest.raises(MinacodeError) as error:
+    with pytest.raises(YucodeError) as error:
         SessionSnapshotStore.resolve_uid("rename the", config.data_dir, str(tmp_path))
 
     # Guessing between them would resume the wrong work silently.

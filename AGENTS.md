@@ -12,26 +12,26 @@ Keep this file short. It is an entry point, not a second design document.
 
 ## Project map
 
-- `minacode/engine.py`: the agent turn loop that composes context, model, and tools.
-- `minacode/context.py`, `minacode/model.py`, `minacode/runner.py`: context projection and
+- `yucode/engine.py`: the agent turn loop that composes context, model, and tools.
+- `yucode/context.py`, `yucode/model.py`, `yucode/runner.py`: context projection and
   compaction, provider request protocols, and the tool execution lifecycle.
-- `minacode/update.py`: the background version check.
-- `minacode/session.py`: durable semantic state and persistence.
-- `minacode/tools/`, `minacode/image.py`, `minacode/mcp.py`, `minacode/skill.py`: vertical feature modules.
+- `yucode/update.py`: the background version check.
+- `yucode/session.py`: durable semantic state and persistence.
+- `yucode/tools/`, `yucode/image.py`, `yucode/mcp.py`, `yucode/skill.py`: vertical feature modules.
   `tools/` splits the built-in tool set by capability and owns the registry in its `__init__.py`.
-- `minacode/provider_compat.py`: evidence-backed provider compatibility policy.
-- `minacode/loop.py`, `minacode/tui.py`, `minacode/render.py`: commands, interaction, and presentation.
+- `yucode/provider_compat.py`: evidence-backed provider compatibility policy.
+- `yucode/loop.py`, `yucode/tui.py`, `yucode/render.py`: commands, interaction, and presentation.
 - `tests/`: behavior-oriented tests grouped by subsystem and boundary.
 
 ## Project workflow
 
 - **Tests:** run targeted tests while iterating and `uv run pytest` before completing behavior changes.
-- **Quality:** run `uv run ruff check minacode`, `uv run ruff format --check minacode`, and `uv run pyright`.
+- **Quality:** run `uv run ruff check yucode`, `uv run ruff format --check yucode`, and `uv run pyright`.
 - **Docs:** when user-facing documentation changes, update the English source, run
   `make -C docs locale-zh`, update the Chinese catalog, then build `html` and `html-zh`.
 - **Changelog:** record user-visible changes under `Unreleased` in the appropriate category; omit
   internal-only refactors and documentation maintenance.
-- **Release (only when requested):** bump `pyproject.toml` and `minacode/base.py`, move Unreleased
+- **Release (only when requested):** bump `pyproject.toml` and `yucode/base.py`, move Unreleased
   entries under the dated version, run tests, quality checks, both doc builds, and `uv build`, commit
   `Release X.Y.Z`, and create the lightweight tag `vX.Y.Z`. Do not push or publish.
 

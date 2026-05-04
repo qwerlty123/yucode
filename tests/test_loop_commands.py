@@ -13,8 +13,8 @@ from prompt_toolkit.buffer import Buffer
 from prompt_toolkit.completion import CompleteEvent, Completer, Completion
 from prompt_toolkit.document import Document
 
-import minacode.loop as loop_module
-from minacode.base import (
+import yucode.loop as loop_module
+from yucode.base import (
     SELECTION_FREE_TEXT,
     SESSION_EVENT_KEY,
     Config,
@@ -24,20 +24,20 @@ from minacode.base import (
     ToolError,
     TurnBox,
 )
-from minacode.context import ContextManager
-from minacode.engine import Agent
-from minacode.loop import CommandLoop
-from minacode.prompts import SYSTEM_PROMPT
-from minacode.render import StatusBar
-from minacode.runner import ToolRunner
-from minacode.session import Session, SessionSnapshotStore, ToolResultRecord
-from minacode.skill import SkillLibrary
-from minacode.tools import AskSpec, CodeIndex, SkillTool, Tool
-from minacode.tui import TuiApp
+from yucode.context import ContextManager
+from yucode.engine import Agent
+from yucode.loop import CommandLoop
+from yucode.prompts import SYSTEM_PROMPT
+from yucode.render import StatusBar
+from yucode.runner import ToolRunner
+from yucode.session import Session, SessionSnapshotStore, ToolResultRecord
+from yucode.skill import SkillLibrary
+from yucode.tools import AskSpec, CodeIndex, SkillTool, Tool
+from yucode.tui import TuiApp
 
 
 def _write_skill(root, name, description, body, *, scripts=None):
-    folder = os.path.join(root, ".minacode", "skills", name)
+    folder = os.path.join(root, ".yucode", "skills", name)
     os.makedirs(folder, exist_ok=True)
     with open(os.path.join(folder, "SKILL.md"), "w", encoding="utf-8") as handle:
         handle.write(f"---\nname: {name}\ndescription: {description}\n---\n{body}\n")
@@ -405,7 +405,7 @@ def test_exit_command_prints_resume_command(tmp_path):
 
     assert (handled, exit_now) == (True, True)
     # The session took its name from the opening message; the pasted line still carries the uid.
-    assert output[-1] == f"Resume 'hello' with:\nminacode --resume {s.uid}"
+    assert output[-1] == f"Resume 'hello' with:\nyucode --resume {s.uid}"
     assert os.path.exists(SessionSnapshotStore.session_path(s.config.data_dir, s.cwd, s.uid))
 
 
@@ -634,7 +634,7 @@ def test_resumed_session_renders_saved_tool_records_without_matching_tool_calls(
             {"role": "assistant", "content": "compacted answer\nfinal detail"},
         ]
     )
-    s.tool_records.append(ToolResultRecord("tr.1", "Bash", ["wc -l minacode.py"], "999 minacode.py", "wc -l minacode.py"))
+    s.tool_records.append(ToolResultRecord("tr.1", "Bash", ["wc -l yucode.py"], "999 yucode.py", "wc -l yucode.py"))
     output = []
     loop = CommandLoop(Agent(s, output_fn=output.append), output_fn=output.append)
 
@@ -644,8 +644,8 @@ def test_resumed_session_renders_saved_tool_records_without_matching_tool_calls(
     assert f"Restored session: {s.uid}" in text
     assert "compacted answer\nfinal detail" in text
     assert "user:" not in text and "assistant:" not in text
-    assert "  Bash  wc -l minacode.py\n    └ stored tr.1" in text
-    assert "999 minacode.py" not in text
+    assert "  Bash  wc -l yucode.py\n    └ stored tr.1" in text
+    assert "999 yucode.py" not in text
 
 
 def test_resumed_session_separates_turn_boxes(tmp_path):
@@ -706,7 +706,7 @@ def test_eof_exit_prints_resume_command(tmp_path):
     assert loop.run() == 0
 
     # The session took its name from the opening message; the pasted line still carries the uid.
-    assert output[-1] == f"Resume 'hello' with:\nminacode --resume {s.uid}"
+    assert output[-1] == f"Resume 'hello' with:\nyucode --resume {s.uid}"
     assert os.path.exists(SessionSnapshotStore.session_path(s.config.data_dir, s.cwd, s.uid))
 
 
@@ -875,19 +875,19 @@ def test_skill_library_index_and_lookup(tmp_path):
     assert s.skills.get("missing") is None
 
 
-def test_builtin_minacode_help_uses_normal_skill_paths(tmp_path):
+def test_builtin_yucode_help_uses_normal_skill_paths(tmp_path):
     s = session(tmp_path)
 
-    skill = s.skills.get("minacode-help")
+    skill = s.skills.get("yucode-help")
     assert skill is not None
     assert skill.source == "builtin"
-    assert "troubleshoot minacode" in skill.description
-    assert "- minacode-help:" in s.skills.index()
-    body = SkillTool(s, ["minacode-help"]).call()
+    assert "troubleshoot yucode" in skill.description
+    assert "- yucode-help:" in s.skills.index()
+    body = SkillTool(s, ["yucode-help"]).call()
     assert "## Inspect the implementation" in body
     assert "### Provider-side tools and web search" in body
     assert all(term in body for term in ("builtin_tools", "$web_search", 'pause_turn', "OpenRouter"))
-    assert "## Configure providers" in s.skills.resolve_mentions("help with $minacode-help")
+    assert "## Configure providers" in s.skills.resolve_mentions("help with $yucode-help")
 
 
 def test_every_builtin_skill_is_declared_as_package_data(tmp_path):
@@ -896,12 +896,12 @@ def test_every_builtin_skill_is_declared_as_package_data(tmp_path):
     Running from a checkout hides an omission completely, so the packaging declaration is checked
     here rather than discovered as a missing skill after release."""
     repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    builtin_root = os.path.join(repo_root, "minacode", "builtin_skills")
+    builtin_root = os.path.join(repo_root, "yucode", "builtin_skills")
     with open(os.path.join(repo_root, "pyproject.toml"), "rb") as handle:
         packaging = tomllib.load(handle)["tool"]["setuptools"]
-    patterns = packaging["package-data"]["minacode"]
+    patterns = packaging["package-data"]["yucode"]
 
-    assert "minacode.builtin_skills" in packaging["packages"]
+    assert "yucode.builtin_skills" in packaging["packages"]
     assert "builtin_skills/*/SKILL.md" in patterns
     for entry in sorted(os.listdir(builtin_root)):
         if os.path.isdir(os.path.join(builtin_root, entry)) and entry != "__pycache__":
@@ -909,19 +909,19 @@ def test_every_builtin_skill_is_declared_as_package_data(tmp_path):
 
 
 def test_skill_project_overrides_user_and_user_overrides_builtin(tmp_path):
-    user_skill = tmp_path / "data" / "skills" / "minacode-help"
+    user_skill = tmp_path / "data" / "skills" / "yucode-help"
     user_skill.mkdir(parents=True)
-    (user_skill / "SKILL.md").write_text("---\nname: minacode-help\ndescription: user version\n---\nuser body\n", encoding="utf-8")
+    (user_skill / "SKILL.md").write_text("---\nname: yucode-help\ndescription: user version\n---\nuser body\n", encoding="utf-8")
 
     user_session = session(tmp_path)
-    skill = user_session.skills.get("minacode-help")
+    skill = user_session.skills.get("yucode-help")
     assert skill.source == "user"
     assert skill.description == "user version"
 
-    _write_skill(tmp_path, "minacode-help", "project version", "project body")
+    _write_skill(tmp_path, "yucode-help", "project version", "project body")
 
     project_session = session(tmp_path)
-    skill = project_session.skills.get("minacode-help")
+    skill = project_session.skills.get("yucode-help")
     assert skill.source == "project"
     assert skill.description == "project version"
 
@@ -978,7 +978,7 @@ def test_skill_tool_absent_only_when_no_skills(tmp_path):
 def test_skills_command_lists_installed(tmp_path):
     base = CommandLoop(Agent(session(tmp_path), output_fn=lambda t: None), output_fn=lambda t: None)
     assert "### Skills · 1" in base.skills_command("")
-    assert "| `minacode-help` | builtin |" in base.skills_command("")
+    assert "| `yucode-help` | builtin |" in base.skills_command("")
 
     _write_skill(tmp_path, "release-notes", "Draft a CHANGELOG entry.", "body")
     loop = CommandLoop(Agent(session(tmp_path), output_fn=lambda t: None), output_fn=lambda t: None)
@@ -1095,7 +1095,7 @@ def test_status_command_uses_rich_table_without_outer_rule(tmp_path):
 
 
 def test_session_from_config_file_theme_param(tmp_path):
-    cfg = tmp_path / "minacode.toml"
+    cfg = tmp_path / "yucode.toml"
     cfg.write_text('[runtime]\ntheme = "light"\n')
     s = Session.from_config_file(path=str(cfg), theme="dark")
     assert s.settings.theme == "dark"

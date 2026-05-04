@@ -7,20 +7,20 @@ from types import SimpleNamespace
 
 from agent_harness import call, session
 
-import minacode.context as context_module
-from minacode.base import (
+import yucode.context as context_module
+from yucode.base import (
     DEFAULT_OUTPUT_RESERVE_TOKENS,
     MIN_CONTEXT_SAFETY_TOKENS,
     ModelError,
 )
-from minacode.context import ContextManager
-from minacode.engine import Agent
-from minacode.loop import CommandLoop
-from minacode.prompts import COMPACTION_SUMMARY_TITLE
-from minacode.runner import ToolRunner
-from minacode.session import HistorySegment
-from minacode.skill import SkillLibrary
-from minacode.tools import EditTool, ReadTool
+from yucode.context import ContextManager
+from yucode.engine import Agent
+from yucode.loop import CommandLoop
+from yucode.prompts import COMPACTION_SUMMARY_TITLE
+from yucode.runner import ToolRunner
+from yucode.session import HistorySegment
+from yucode.skill import SkillLibrary
+from yucode.tools import EditTool, ReadTool
 
 
 def test_model_messages_are_ordered_context_messages(tmp_path):

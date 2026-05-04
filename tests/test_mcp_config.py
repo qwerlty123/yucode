@@ -12,11 +12,11 @@ import pytest
 # ---------------------------------------------------------------------------
 from mcp_harness import mcp_cfg, mcp_tool_info, session
 
-from minacode.base import Config
-from minacode.context import ContextManager
-from minacode.mcp import MCPFileTokenStore, MCPManager, MCPResourceInfo, MCPServerConfig
-from minacode.render import StatusBar
-from minacode.session import Session
+from yucode.base import Config
+from yucode.context import ContextManager
+from yucode.mcp import MCPFileTokenStore, MCPManager, MCPResourceInfo, MCPServerConfig
+from yucode.render import StatusBar
+from yucode.session import Session
 
 
 def parse_one(raw: dict) -> MCPServerConfig | None:

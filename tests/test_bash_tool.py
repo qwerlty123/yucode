@@ -6,15 +6,15 @@ import time
 
 import pytest
 
-import minacode.render as render_module
-from minacode.base import LogBlock, LogEdge, LogLine, LogRole, ToolCall, ToolError
-from minacode.context import ContextManager
-from minacode.engine import Agent
-from minacode.loop import CommandLoop
-from minacode.render import BashLivePreview, UiPrinter
-from minacode.runner import ToolDisplay, ToolRunner
-from minacode.session import Session
-from minacode.tools import BashTool, JobTool, Tool
+import yucode.render as render_module
+from yucode.base import LogBlock, LogEdge, LogLine, LogRole, ToolCall, ToolError
+from yucode.context import ContextManager
+from yucode.engine import Agent
+from yucode.loop import CommandLoop
+from yucode.render import BashLivePreview, UiPrinter
+from yucode.runner import ToolDisplay, ToolRunner
+from yucode.session import Session
+from yucode.tools import BashTool, JobTool, Tool
 
 
 def session(tmp_path):
@@ -178,7 +178,7 @@ def test_bash_readonly_auto_approval_classification(tmp_path):
     # Safe read-only commands auto-run (no confirmation prompt in non-yolo mode).
     assert readonly("ls -la")
     assert readonly("cat file.txt")
-    assert readonly("wc -l minacode.py")
+    assert readonly("wc -l yucode.py")
     assert readonly("find . -name '*.py'")
     assert readonly("rg needle src")
     assert readonly("git status --short")

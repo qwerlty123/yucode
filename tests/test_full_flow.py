@@ -14,14 +14,14 @@ import pytest
 from model_harness import _AnthropicMockClientFactory, _MockClientFactory
 from openai_mock_server import OpenAIMockServer
 
-from minacode.base import MIN_CONTEXT_SAFETY_TOKENS, SESSION_EVENT_KEY, Config, ProviderConfig
-from minacode.context import ContextManager
-from minacode.engine import Agent
-from minacode.model import ModelClient
-from minacode.prompts import COMPACTION_SUMMARY_TITLE, SYSTEM_PROMPT
-from minacode.session import Session
-from minacode.skill import SkillLibrary
-from minacode.tools import Tool
+from yucode.base import MIN_CONTEXT_SAFETY_TOKENS, SESSION_EVENT_KEY, Config, ProviderConfig
+from yucode.context import ContextManager
+from yucode.engine import Agent
+from yucode.model import ModelClient
+from yucode.prompts import COMPACTION_SUMMARY_TITLE, SYSTEM_PROMPT
+from yucode.session import Session
+from yucode.skill import SkillLibrary
+from yucode.tools import Tool
 
 
 def _tool_call_response(call_id: str, name: str, arguments: dict) -> tuple[int, dict]:
@@ -306,7 +306,7 @@ def test_full_flow_compacts_before_answering(tmp_path, monkeypatch):
     assert len(requests) == 2
 
     compactor_request, agent_request = requests
-    assert "Compact the minacode working context." in compactor_request["messages"][0]["content"]
+    assert "Compact the yucode working context." in compactor_request["messages"][0]["content"]
     assert "tools" not in compactor_request
     assert "OLD_BODY_SENTINEL" in compactor_request["messages"][1]["content"]
 

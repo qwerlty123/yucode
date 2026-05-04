@@ -5,13 +5,13 @@ These tests exercise the stateful parts of the TUI without requiring a real term
 
 import time
 
-import minacode.loop as loop_module
-from minacode.base import Config
-from minacode.engine import Agent
-from minacode.loop import CommandLoop
-from minacode.render import BashLivePreview
-from minacode.session import Session
-from minacode.tui import TUI_MODAL_PENDING, ChoiceViewState, DiffViewState, TabbedViewState
+import yucode.loop as loop_module
+from yucode.base import Config
+from yucode.engine import Agent
+from yucode.loop import CommandLoop
+from yucode.render import BashLivePreview
+from yucode.session import Session
+from yucode.tui import TUI_MODAL_PENDING, ChoiceViewState, DiffViewState, TabbedViewState
 
 
 def test_diff_view_state_tab_switching():

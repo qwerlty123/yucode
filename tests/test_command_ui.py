@@ -11,19 +11,19 @@ import pytest
 from prompt_toolkit.utils import get_cwidth
 from tui_harness import ResizableOutput, loop, rendered_screen_text, run_interactive_tui, session, wait_until
 
-from minacode.base import (
+from yucode.base import (
     PROVIDER_API_CHOICES,
     REASONING_CHOICES,
     SELECTION_BACK,
     ModelError,
     ProviderConfig,
 )
-from minacode.engine import Agent
-from minacode.loop import SET_KEYS, CommandCompleter, CommandLoop
-from minacode.model import ModelClient
-from minacode.session import Session
-from minacode.tools import Tool
-from minacode.tui import TUI_MODAL_PENDING, DiffViewState, TabbedViewState, TuiApp
+from yucode.engine import Agent
+from yucode.loop import SET_KEYS, CommandCompleter, CommandLoop
+from yucode.model import ModelClient
+from yucode.session import Session
+from yucode.tools import Tool
+from yucode.tui import TUI_MODAL_PENDING, DiffViewState, TabbedViewState, TuiApp
 
 
 def diff_loop(tmp_path):

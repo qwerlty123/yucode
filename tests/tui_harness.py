@@ -9,13 +9,13 @@ from prompt_toolkit.data_structures import Size
 from prompt_toolkit.input.defaults import create_pipe_input
 from prompt_toolkit.output import DummyOutput
 
-import minacode.tui as tui_module
-from minacode.base import (
+import yucode.tui as tui_module
+from yucode.base import (
     Config,
 )
-from minacode.engine import Agent
-from minacode.loop import CommandLoop
-from minacode.session import Session
+from yucode.engine import Agent
+from yucode.loop import CommandLoop
+from yucode.session import Session
 
 
 def session(tmp_path):

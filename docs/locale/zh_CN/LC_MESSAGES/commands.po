@@ -1,12 +1,12 @@
 # SOME DESCRIPTIVE TITLE.
 # Copyright (C) hit9
-# This file is distributed under the same license as the minacode package.
+# This file is distributed under the same license as the yucode package.
 # FIRST AUTHOR <EMAIL@ADDRESS>, 2026.
 #
 #, fuzzy
 msgid ""
 msgstr ""
-"Project-Id-Version: minacode 0.16\n"
+"Project-Id-Version: yucode 0.16\n"
 "Report-Msgid-Bugs-To: \n"
 "POT-Creation-Date: 2026-08-02 00:35-0700\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
@@ -130,13 +130,13 @@ msgstr ""
 #: ../../commands.md:56
 msgid ""
 "**`/reason [EFFORT]`** — Show or set reasoning effort. Values: `off`, "
-"`minimal`, `low`, `medium`, `high`, `xhigh`, `max`. Minacode maps known "
+"`minimal`, `low`, `medium`, `high`, `xhigh`, `max`. Yucode maps known "
 "model families to their nearest supported level; unrecognized providers "
 "and models keep the selected value. Without an argument it opens a "
 "picker."
 msgstr ""
 "**`/reason [EFFORT]`** — 显示或设置 reasoning effort。可选值：`off`、"
-"`minimal`、`low`、`medium`、`high`、`xhigh`、`max`。Minacode 会将已知 model "
+"`minimal`、`low`、`medium`、`high`、`xhigh`、`max`。Yucode 会将已知 model "
 "family 映射到其最接近的受支持级别；未识别的 provider 和模型会保留所选值。不带参数时打开选择器。"
 
 #: ../../commands.md:61
@@ -169,9 +169,9 @@ msgstr ""
 #: ../../commands.md:76
 msgid ""
 "**`/compact`** — Summarize and shrink the conversation immediately. "
-"minacode keeps long sessions within budget on its own, but `/compact` "
+"yucode keeps long sessions within budget on its own, but `/compact` "
 "trims on demand."
-msgstr "**`/compact`** — 立即总结并缩短对话。minacode 会自动控制长 session 的预算；`/compact` 用于按需压缩。"
+msgstr "**`/compact`** — 立即总结并缩短对话。yucode 会自动控制长 session 的预算；`/compact` 用于按需压缩。"
 
 #: ../../commands.md:79
 msgid ""
@@ -299,6 +299,6 @@ msgstr "**`/help`** — 显示内置命令和工具参考。"
 
 #: ../../commands.md:124
 msgid ""
-"**`/exit`, `/quit`** — Leave minacode. Your session is saved "
+"**`/exit`, `/quit`** — Leave yucode. Your session is saved "
 "automatically and can be resumed with `-c` or `--resume`."
-msgstr "**`/exit`, `/quit`** — 退出 minacode。Session 会自动保存，可使用 `-c` 或 `--resume` 恢复。"
+msgstr "**`/exit`, `/quit`** — 退出 yucode。Session 会自动保存，可使用 `-c` 或 `--resume` 恢复。"

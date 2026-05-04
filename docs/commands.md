@@ -11,7 +11,7 @@ session id, active provider and model, calculated compaction-budget fill percent
 conversation history, prompt-cache hit ratio, code index state, background jobs,
 and whether an update is available.
 
-```{figure} ../snapshots/minacode-status-command.png
+```{figure} ../snapshots/yucode-status-command.png
 :alt: The /status command showing workspace, session, provider, context, and code index state
 :width: 600px
 :align: center
@@ -22,7 +22,7 @@ The /status output at a glance.
 **`/diff`** — Review changes from the latest turn or the whole session. See
 [Reviewing changes](usage.md#reviewing-changes).
 
-<div class="term-shot" role="img" aria-label="The diff viewer: a Latest and Session tab above a list of changed files, each with added and removed line counts, and a key hint along the bottom."><span><span class="fs-i fs-tab-on"> Latest </span><span class="fs-i fs-dim"> │ </span><span class="fs-i fs-tab-off"> Session </span></span><span> </span><span class="fs-sel">&gt; <span class="fs-i fs-add">+45</span> <span class="fs-i fs-del">-12</span> docs/usage.md</span><span class="fs-dim">  <span class="fs-i fs-add">+12</span> <span class="fs-i fs-del">- 3</span> minacode.py</span><span class="fs-dim">  <span class="fs-i fs-add">+ 4</span> <span class="fs-i fs-del">- 0</span> tests/test_mcp.py</span><span> </span><span class="fs-dim">  [list] ↑/↓ or j/k move · ←/→ or h/l tab · Enter open · r refresh · Esc/q close [1/3]</span></div>
+<div class="term-shot" role="img" aria-label="The diff viewer: a Latest and Session tab above a list of changed files, each with added and removed line counts, and a key hint along the bottom."><span><span class="fs-i fs-tab-on"> Latest </span><span class="fs-i fs-dim"> │ </span><span class="fs-i fs-tab-off"> Session </span></span><span> </span><span class="fs-sel">&gt; <span class="fs-i fs-add">+45</span> <span class="fs-i fs-del">-12</span> docs/usage.md</span><span class="fs-dim">  <span class="fs-i fs-add">+12</span> <span class="fs-i fs-del">- 3</span> yucode.py</span><span class="fs-dim">  <span class="fs-i fs-add">+ 4</span> <span class="fs-i fs-del">- 0</span> tests/test_mcp.py</span><span> </span><span class="fs-dim">  [list] ↑/↓ or j/k move · ←/→ or h/l tab · Enter open · r refresh · Esc/q close [1/3]</span></div>
 
 The two tabs pick the range; each row is one changed file with its added and removed line
 counts. `Enter` opens the selected file's diff.
@@ -54,11 +54,11 @@ an argument it opens an interactive picker with configured and discovered models
 Changing the model also prompts you to pick a reasoning effort.
 
 **`/reason [EFFORT]`** — Show or set reasoning effort. Values: `off`, `minimal`,
-`low`, `medium`, `high`, `xhigh`, `max`. Minacode maps known model families to
+`low`, `medium`, `high`, `xhigh`, `max`. Yucode maps known model families to
 their nearest supported level; unrecognized providers and models keep the selected
 value. Without an argument it opens a picker.
 
-```{figure} ../snapshots/minacode-demo-switching-providers-models.gif
+```{figure} ../snapshots/yucode-demo-switching-providers-models.gif
 :alt: Switching providers and models interactively during a session
 :width: 600px
 :align: center
@@ -73,7 +73,7 @@ Switching providers and models mid-session.
 **`/sessions [all]`** — Browse saved sessions and re-enter one; `/resume` is the same command.
 See [Switching sessions](usage.md#switching-sessions).
 
-**`/compact`** — Summarize and shrink the conversation immediately. minacode keeps
+**`/compact`** — Summarize and shrink the conversation immediately. yucode keeps
 long sessions within budget on its own, but `/compact` trims on demand.
 
 **`/yolo`** — Toggle confirmation prompts. See [Safety](safety.md) before turning
@@ -121,5 +121,5 @@ request. Automatic retries also show their attempt and concise reason, such as
 
 **`/help`** — Show the built-in command and tool reference.
 
-**`/exit`, `/quit`** — Leave minacode. Your session is saved automatically and can
+**`/exit`, `/quit`** — Leave yucode. Your session is saved automatically and can
 be resumed with `-c` or `--resume`.

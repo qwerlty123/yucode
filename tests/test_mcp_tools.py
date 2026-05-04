@@ -11,12 +11,12 @@ import pytest
 # ---------------------------------------------------------------------------
 from mcp_harness import _fake_resource, mcp_cfg, mcp_tool_info, session
 
-from minacode.base import Config, ToolCall, ToolError
-from minacode.context import ContextManager
-from minacode.mcp import MCPManager, MCPResourceInfo, MCPToolInfo
-from minacode.runner import ToolRunner
-from minacode.session import Session
-from minacode.tools import MCPTool, Tool
+from yucode.base import Config, ToolCall, ToolError
+from yucode.context import ContextManager
+from yucode.mcp import MCPManager, MCPResourceInfo, MCPToolInfo
+from yucode.runner import ToolRunner
+from yucode.session import Session
+from yucode.tools import MCPTool, Tool
 
 
 def _index_session(servers):

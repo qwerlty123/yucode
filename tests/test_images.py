@@ -13,12 +13,12 @@ from PIL import Image
 from prompt_toolkit.document import Document
 from prompt_toolkit.history import FileHistory
 
-import minacode.loop as loop_module
-import minacode.tui as tui_module
-from minacode.base import Config, ModelError, ProviderConfig, ToolCall, ToolError
-from minacode.context import ContextManager
-from minacode.engine import Agent
-from minacode.image import (
+import yucode.loop as loop_module
+import yucode.tui as tui_module
+from yucode.base import Config, ModelError, ProviderConfig, ToolCall, ToolError
+from yucode.context import ContextManager
+from yucode.engine import Agent
+from yucode.image import (
     IMAGE_MARKER,
     IMAGE_REFS_KEY,
     TOOL_IMAGE_OBSERVATION_KEY,
@@ -27,12 +27,12 @@ from minacode.image import (
     ImageRef,
     UserInput,
 )
-from minacode.loop import CommandLoop
-from minacode.model import ModelClient
-from minacode.runner import ToolRunner
-from minacode.session import Session, SessionSnapshotStore
-from minacode.tools import ViewImageTool
-from minacode.tui import TuiApp
+from yucode.loop import CommandLoop
+from yucode.model import ModelClient
+from yucode.runner import ToolRunner
+from yucode.session import Session, SessionSnapshotStore
+from yucode.tools import ViewImageTool
+from yucode.tui import TuiApp
 
 
 def image_file(path, *, size=(32, 24), image_format="PNG", color=(12, 34, 56)):
@@ -585,13 +585,13 @@ def test_tmux_renders_image_error_above_inline_label_without_control_character(t
     image_file(tmp_path / "tmux.png")
     probe = tmp_path / "image_tui_probe.py"
     probe.write_text(
-        "from minacode.session import Session\n"
-        "from minacode.tui import TuiApp\n"
+        "from yucode.session import Session\n"
+        "from yucode.tui import TuiApp\n"
         f"session = Session(cwd={str(tmp_path)!r})\n"
         'session.config.provider.image_input = "off"\n'
         "TuiApp(images=session.images).run()\n"
     )
-    socket = "minacode-image-test-" + tmp_path.name
+    socket = "yucode-image-test-" + tmp_path.name
     command = [executable, "-L", socket]
     pane_command = f"{shlex.quote(sys.executable)} {shlex.quote(str(probe))}"
     try:

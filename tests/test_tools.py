@@ -5,8 +5,8 @@ import shutil
 import code_symbol_index as csi
 import pytest
 
-import minacode
-from minacode.base import (
+import yucode
+from yucode.base import (
     ConfigFile,
     LogBlock,
     LogEdge,
@@ -16,12 +16,12 @@ from minacode.base import (
     ToolCall,
     ToolError,
 )
-from minacode.context import ContextManager
-from minacode.model import ModelClient
-from minacode.render import UiPrinter
-from minacode.runner import ToolRunner
-from minacode.session import HistorySegment, Session, SessionSnapshotCodec
-from minacode.tools import (
+from yucode.context import ContextManager
+from yucode.model import ModelClient
+from yucode.render import UiPrinter
+from yucode.runner import ToolRunner
+from yucode.session import HistorySegment, Session, SessionSnapshotCodec
+from yucode.tools import (
     TOOL_REGISTRY,
     TOOLS,
     AskTool,
@@ -355,7 +355,7 @@ def test_ask_tool_registered():
     assert AskTool in TOOLS
     assert TOOL_REGISTRY["Ask"] is AskTool
     assert "Question" not in TOOL_REGISTRY
-    assert not hasattr(minacode, "QuestionTool")
+    assert not hasattr(yucode, "QuestionTool")
 
 
 def test_ask_tool_schema():
@@ -1210,7 +1210,7 @@ def test_single_and_batch_payload_shapes_are_supported():
     assert ModelClient.tool_payload("Read", {"path": "a.py"}) == [{"path": "a.py", "ranges": [[0, 0]]}]
     assert ModelClient.tool_payload("Read", {"path": "a.py", "ranges": [0, 2]}) == [{"path": "a.py", "ranges": [[0, 2]]}]
     assert ModelClient.tool_payload("Read", {"files": [{"path": "a.py", "ranges": [[0, 1]]}]}) == [{"path": "a.py", "ranges": [[0, 1]]}]
-    assert ReadTool(Session(cwd="."), [{"path": "minacode.py"}]).targets()[0][1] == [(0, 0)]
+    assert ReadTool(Session(cwd="."), [{"path": "yucode.py"}]).targets()[0][1] == [(0, 0)]
     assert ModelClient.tool_payload("Search", {"pattern": "TODO"}) == [{"pattern": "TODO"}]
     assert ModelClient.tool_payload("Search", {"queries": [{"pattern": "TODO"}]}) == [{"pattern": "TODO"}]
     assert ModelClient.tool_payload("Note", {"set_goal": "ship"}) == [{"set_goal": "ship"}]
@@ -1392,9 +1392,9 @@ def test_uiprinter_renders_stored_result_dim():
 
 
 def test_uiprinter_renders_tool_root_without_generic_prefix():
-    block = LogBlock([LogLine("Read", "minacode.py 0:100 → tr.6 [auto]", LogRole.TOOL)])
+    block = LogBlock([LogLine("Read", "yucode.py 0:100 → tr.6 [auto]", LogRole.TOOL)])
     segments = UiPrinter(output_fn=lambda text: None).log_segments(block)
     text = "".join(value for _style, value in segments)
 
-    assert text == "  Read  minacode.py 0:100 → tr.6 [auto]\n"
-    assert any(style == "fg:default" and "minacode.py 0:100 → tr.6 [auto]" in value for style, value in segments)
+    assert text == "  Read  yucode.py 0:100 → tr.6 [auto]\n"
+    assert any(style == "fg:default" and "yucode.py 0:100 → tr.6 [auto]" in value for style, value in segments)

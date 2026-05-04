@@ -12,15 +12,15 @@ import pytest
 # ---------------------------------------------------------------------------
 from mcp_harness import _fake_resource, mcp_cfg, mcp_tool_info
 
-from minacode.base import SELECTION_BACK, Config
-from minacode.engine import Agent
-from minacode.loop import CommandCompleter, CommandLoop
-from minacode.mcp import MCPFileTokenStore, MCPManager
-from minacode.render import StatusBar, UiPrinter
-from minacode.session import Session, SessionSnapshotStore
-from minacode.tools import CodeIndex
-from minacode.tui import TUI_MODAL_PENDING, ChoiceViewState
-from minacode.update import UpdateChecker
+from yucode.base import SELECTION_BACK, Config
+from yucode.engine import Agent
+from yucode.loop import CommandCompleter, CommandLoop
+from yucode.mcp import MCPFileTokenStore, MCPManager
+from yucode.render import StatusBar, UiPrinter
+from yucode.session import Session, SessionSnapshotStore
+from yucode.tools import CodeIndex
+from yucode.tui import TUI_MODAL_PENDING, ChoiceViewState
+from yucode.update import UpdateChecker
 
 
 def oauth_value(store: MCPFileTokenStore, url: str, collection: str, suffix: str) -> dict | None:

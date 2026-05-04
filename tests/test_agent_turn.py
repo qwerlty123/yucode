@@ -9,8 +9,8 @@ from types import SimpleNamespace
 import pytest
 from agent_harness import call, queue, session
 
-import minacode.engine as engine_module
-from minacode.base import (
+import yucode.engine as engine_module
+from yucode.base import (
     ANTHROPIC_DEFAULT_MAX_TOKENS,
     Config,
     LogBlock,
@@ -19,14 +19,14 @@ from minacode.base import (
     ProviderConfig,
     ToolCall,
 )
-from minacode.context import ContextManager
-from minacode.engine import Agent
-from minacode.model import ModelClient
-from minacode.prompts import INTERRUPT_MARKER, LIVE_FOLLOWUP_PREFIX, SYSTEM_PROMPT
-from minacode.runner import ToolRunner
-from minacode.session import Session, SessionSnapshotCodec
-from minacode.skill import SkillLibrary
-from minacode.tools import BashTool, ReadTool, Tool
+from yucode.context import ContextManager
+from yucode.engine import Agent
+from yucode.model import ModelClient
+from yucode.prompts import INTERRUPT_MARKER, LIVE_FOLLOWUP_PREFIX, SYSTEM_PROMPT
+from yucode.runner import ToolRunner
+from yucode.session import Session, SessionSnapshotCodec
+from yucode.skill import SkillLibrary
+from yucode.tools import BashTool, ReadTool, Tool
 
 
 def _runner(tmp_path, input_reply=""):
@@ -926,7 +926,7 @@ def test_provider_compatibility_and_prompt_cache_key(tmp_path):
     first = client.prompt_cache_key(provider, [BashTool.schema(), ReadTool.schema()])
     second = client.prompt_cache_key(provider, [ReadTool.schema(), BashTool.schema()])
     assert first == second
-    assert first.startswith("minacode-")
+    assert first.startswith("yucode-")
 
     provider.prompt_cache_key = "fixed-key"
     assert client.prompt_cache_key(provider, None) == "fixed-key"

@@ -14,21 +14,21 @@ from prompt_toolkit.input.defaults import create_pipe_input
 from prompt_toolkit.output import DummyOutput
 from tui_harness import ResizableOutput, loop, run_interactive_tui, session, wait_until
 
-import minacode.render as render_module
-import minacode.tui as tui_module
-from minacode.base import (
+import yucode.render as render_module
+import yucode.tui as tui_module
+from yucode.base import (
     Config,
     MalformedToolCallError,
-    MinacodeError,
+    YucodeError,
     ToolCall,
 )
-from minacode.engine import Agent
-from minacode.loop import CommandLoop, TuiRuntime
-from minacode.prompts import LIVE_FOLLOWUP_PREFIX
-from minacode.session import Session, SessionSnapshotStore
-from minacode.tools import CodeIndex
-from minacode.tui import TuiApp
-from minacode.update import UpdateChecker
+from yucode.engine import Agent
+from yucode.loop import CommandLoop, TuiRuntime
+from yucode.prompts import LIVE_FOLLOWUP_PREFIX
+from yucode.session import Session, SessionSnapshotStore
+from yucode.tools import CodeIndex
+from yucode.tui import TuiApp
+from yucode.update import UpdateChecker
 
 
 def history_file(path, entries, line="x" * 200):
@@ -151,7 +151,7 @@ def test_tui_dispatch_failed_command_still_flushes_followup(tmp_path):
     command_loop.tui = TuiApp()
     runtime = TuiRuntime(command_loop)
     command_loop.session.enqueue_user_input("followup after error")
-    command_loop.command = lambda _text: (_ for _ in ()).throw(MinacodeError("command failed"))
+    command_loop.command = lambda _text: (_ for _ in ()).throw(YucodeError("command failed"))
 
     assert runtime.dispatch("/broken")
 
@@ -438,7 +438,7 @@ def test_provider_tool_stream_promotes_answer_once_into_tui_scrollback(tmp_path,
                 "type": "web_search_call",
                 "id": "ws_1",
                 "status": "completed",
-                "action": {"type": "search", "query": "minacode"},
+                "action": {"type": "search", "query": "yucode"},
             },
         ],
     }
@@ -452,7 +452,7 @@ def test_provider_tool_stream_promotes_answer_once_into_tui_scrollback(tmp_path,
                 "type": "web_search_call",
                 "id": "ws_1",
                 "status": "completed",
-                "action": {"type": "search", "query": "minacode"},
+                "action": {"type": "search", "query": "yucode"},
             },
         },
         {"type": "response.completed", "response": terminal},
@@ -480,7 +480,7 @@ def test_provider_tool_stream_publishes_only_the_text_written_after_the_search(t
     provider.key = "sk-test"
     command_loop.tui = TuiApp()  # no running application: scrollback writes run inline
     lead, rest = "Let me look that up.", "The searched answer."
-    call = {"type": "web_search_call", "id": "ws_1", "status": "completed", "action": {"type": "search", "query": "minacode"}}
+    call = {"type": "web_search_call", "id": "ws_1", "status": "completed", "action": {"type": "search", "query": "yucode"}}
     terminal = {
         "status": "completed",
         "output": [
@@ -847,7 +847,7 @@ def test_tui_commands_print_output_immediately(tmp_path, monkeypatch):
     text = "".join(printed)
     assert "/provider" in text
     assert "status marker" in text
-    assert "minacode-help" in text
+    assert "yucode-help" in text
 
 
 def test_background_output_is_closed_before_final_output(tmp_path):

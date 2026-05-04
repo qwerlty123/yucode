@@ -3,8 +3,8 @@ factories, and the OAuth token-store helpers."""
 
 from types import SimpleNamespace
 
-from minacode.mcp import MCPToolInfo
-from minacode.session import Session
+from yucode.mcp import MCPToolInfo
+from yucode.session import Session
 
 # ---------------------------------------------------------------------------
 # Helpers

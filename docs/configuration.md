@@ -1,7 +1,7 @@
 # Configuration
 
-minacode reads a single TOML file, `~/.minacode/config.toml` by default. Generate a
-commented starter with `minacode --init-config`, or point at another file with
+yucode reads a single TOML file, `~/.yucode/config.toml` by default. Generate a
+commented starter with `yucode --init-config`, or point at another file with
 `--config <path>`.
 
 <span class="marker">Only the `[provider]` block is required.</span> Every other key falls back to
@@ -10,7 +10,7 @@ at any time with `/config`.
 
 ## Providers
 
-minacode supports OpenAI-compatible Chat Completions and Responses APIs, plus the Anthropic
+yucode supports OpenAI-compatible Chat Completions and Responses APIs, plus the Anthropic
 Messages API. Define one or more `[provider.<name>]` blocks and select one with
 `[provider] active`:
 
@@ -24,7 +24,7 @@ key = "sk-..."
 model = "deepseek-v4-flash"
 ```
 
-These three fields are enough for most endpoints. minacode selects the usual protocol and applies
+These three fields are enough for most endpoints. yucode selects the usual protocol and applies
 only necessary, documented compatibility adjustments. Explicit settings always take precedence.
 Use `/config` to inspect the result.
 
@@ -74,7 +74,7 @@ timer active indefinitely, so `response_timeout` separately limits the complete 
 ten minutes by default. Reaching the total limit cancels the request without automatic retries;
 set it to `0` only when deliberately allowing unbounded generations.
 
-For provider/model combinations with documented reasoning constraints, minacode maps the selected
+For provider/model combinations with documented reasoning constraints, yucode maps the selected
 effort to the nearest accepted value. Unknown OpenAI-compatible endpoints and model names stay on
 the generic path rather than an allowlist; set `api` and `chat_reasoning` explicitly if automatic
 selection is wrong. `/config` shows the resolved reasoning effort, while `/status` shows the active
@@ -106,12 +106,12 @@ builtin_tools = [{ type = "web_search" }, { type = "web_extractor" }]
 One provider configures search elsewhere, through [`extra_body`](#optional-provider-settings):
 Qwen's Chat Completions endpoint takes `enable_search`. DeepSeek has no web search.
 
-Builtin tools only work with the APIs shown in the table. If you switch to another API, minacode
+Builtin tools only work with the APIs shown in the table. If you switch to another API, yucode
 keeps the setting but does not send those tools; switching back enables them again. Use `/config`
-to check whether they are active. If minacode reports an unsupported entry, compare it with the
+to check whether they are active. If yucode reports an unsupported entry, compare it with the
 example for your provider.
 
-With `image_input = "auto"`, minacode sends attached images using the selected standard API. A
+With `image_input = "auto"`, yucode sends attached images using the selected standard API. A
 successful image request is remembered for that provider and model during the session; only an
 explicit image-not-supported response disables later image submissions. Set `on` or `off` when the
 endpoint's capability is already known. Historical images remain readable as text labels after
@@ -140,7 +140,7 @@ lists the supported keys). `/yolo` toggles `yolo`.
 
 ```toml
 [paths]
-data_dir = "~/.minacode"   # sessions, input history, OAuth tokens, user skills, update cache
+data_dir = "~/.yucode"   # sessions, input history, OAuth tokens, user skills, update cache
 ```
 
 Sessions live under `<data_dir>/projects/<project>/`, one directory per working directory. Each

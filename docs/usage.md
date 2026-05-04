@@ -1,16 +1,16 @@
 # Interaction
 
-minacode runs as a conversation in your terminal. You type a request, the agent works
+yucode runs as a conversation in your terminal. You type a request, the agent works
 through it with [tools](tools.md), and you stay in the loop the whole time — steering,
 answering questions, and reviewing changes.
 
 ## Follow-ups
 
-You can keep typing while minacode works. A submitted follow-up joins the current task if
+You can keep typing while yucode works. A submitted follow-up joins the current task if
 another model step begins; otherwise it becomes the next task. A draft still in the editor is
 never submitted by interrupting — the first `Ctrl-C` discards it instead.
 
-<div class="term-shot" role="img" aria-label="Terminal view: minacode is working on a request while two follow-up messages wait below a divider reading 'working, 2 queued'."><span class="fs-user">• refactor the MCP manager</span><span class="fs-tool">  Read minacode.py</span><span class="fs-tool">  Edit minacode.py</span><span class="fs-divider">──── working (12s) [ 2 queued ] ─────────────</span><span class="fs-queued">+ also update the tests</span><span class="fs-queued">+ and bump the version</span><span class="fs-prompt">&gt; <span class="fs-caret">▏</span></span><span class="fs-hint">  ↑ recalls queued · Ctrl-C interrupts</span></div>
+<div class="term-shot" role="img" aria-label="Terminal view: yucode is working on a request while two follow-up messages wait below a divider reading 'working, 2 queued'."><span class="fs-user">• refactor the MCP manager</span><span class="fs-tool">  Read yucode.py</span><span class="fs-tool">  Edit yucode.py</span><span class="fs-divider">──── working (12s) [ 2 queued ] ─────────────</span><span class="fs-queued">+ also update the tests</span><span class="fs-queued">+ and bump the version</span><span class="fs-prompt">&gt; <span class="fs-caret">▏</span></span><span class="fs-hint">  ↑ recalls queued · Ctrl-C interrupts</span></div>
 
 A `+` below the divider is waiting for the next model step. At that boundary — after the current
 tool-call batch, when there is one — all waiting follow-ups are sent together, in order, with the
@@ -30,7 +30,7 @@ Interrupting splits two ways. If the agent has not answered yet, `Ctrl-C` *retra
 message: it is discarded and never reaches the conversation record or the saved session, as
 if it was never sent (your input history still recalls it with `Ctrl-P`). Once the agent has
 spoken or run a tool, `Ctrl-C` *interrupts*: the work already shown stays, and the turn is
-marked as interrupted so minacode knows it ended early.
+marked as interrupted so yucode knows it ended early.
 
 ## Streaming model output
 
@@ -50,7 +50,7 @@ with `provider.stream = false` or `/set provider.stream off`.
 
 While Bash runs, its live output stays above the `working` divider. When the command
 is running, a blank row keeps its last live-output line clear of that divider. When the
-command finishes, minacode keeps up to three lines from each output stream in the transcript.
+command finishes, yucode keeps up to three lines from each output stream in the transcript.
 The gray `output · Ctrl-O for more` row opens a larger, bounded preview: press `Ctrl-O`
 to browse the ten most recent completed Bash previews, newest first. Use `j`/`k` or the arrows
 to select one and `Enter` to open it; `Esc` returns to the list, while `Ctrl-O` or `q` closes
@@ -111,7 +111,7 @@ Two inline references, both Tab-completed as you type:
 - `Ctrl-O` — browse the ten most recent completed Bash output previews; press it again to close
 - `Ctrl-X Ctrl-E` or `Ctrl-G` — edit the current input in `$VISUAL` / `$EDITOR` (falls back to vim)
 
-```{figure} ../snapshots/minacode-working-input-editor.png
+```{figure} ../snapshots/yucode-working-input-editor.png
 :alt: Editing a follow-up message in an external editor
 :width: 600px
 :align: center
@@ -127,14 +127,14 @@ Everything from the scissors line down is stripped before the message is sent; a
 
 ### Image input
 
-Paste or type the path of an existing local image directly into the prompt. minacode replaces
+Paste or type the path of an existing local image directly into the prompt. yucode replaces
 the path with an inline label such as `[Image #1 · screenshot.png]`, so you can see exactly which
 images will be submitted while continuing to edit the surrounding text. Relative paths resolve
 from the workspace; quoted paths and backslash-escaped spaces are accepted.
 
 <div class="term-shot" role="img" aria-label="The input prompt after recognizing a local screenshot path as an editable inline image label."><span class="fs-prompt">&gt; explain <span class="fs-i fs-sel">[Image #1 · screenshot.png]</span> and fix the layout<span class="fs-caret">▏</span></span></div>
 
-PNG, JPEG, WebP, and single-frame GIF files are supported. minacode sends images using the selected
+PNG, JPEG, WebP, and single-frame GIF files are supported. yucode sends images using the selected
 standard API. If the provider explicitly rejects image input, that result is remembered for the
 session and later image submissions are blocked without clearing the draft. Queued follow-ups,
 resumed sessions, and providers with image input disabled keep readable image labels. See
@@ -145,17 +145,17 @@ resumed sessions, and providers with image input disabled keep readable image la
 <span class="marker">Your work is saved automatically</span> — the conversation, edits, and diffs
 are tied to the project directory you started in, so an interrupted session picks up where it
 stopped. Sessions untouched for seven days are removed by default, swept in the background when
-minacode starts; it reports how many it removed. Resuming a session resets its clock, so one you
+yucode starts; it reports how many it removed. Resuming a session resets its clock, so one you
 keep returning to is never removed. Set `runtime.session_retention_days = 0` to keep them
 indefinitely.
 
 Resume from the command line:
 
 ```sh
-minacode -c              # resume the latest session in this project
-minacode --resume        # same, explicit
-minacode --resume UID    # resume a specific session by id, from any directory
-minacode --resume "fd leak"   # or by name, or by the first few characters of an id
+yucode -c              # resume the latest session in this project
+yucode --resume        # same, explicit
+yucode --resume UID    # resume a specific session by id, from any directory
+yucode --resume "fd leak"   # or by name, or by the first few characters of an id
 ```
 
 Sessions are stored per project, so `-c` and a bare `--resume` never reach into another project's
@@ -163,7 +163,7 @@ history — even when your most recent session anywhere was somewhere else. A `U
 across every project, so you can resume one by id from wherever you are.
 
 A name or id prefix is searched in the current project first, then everywhere — you can resume a
-session by name after moving directories. When a query matches more than one session, minacode
+session by name after moving directories. When a query matches more than one session, yucode
 <span class="marker">lists the candidates instead of guessing</span> between them.
 
 Resuming replays the conversation into your scrollback, including the diff each edit made. Long
@@ -190,14 +190,14 @@ name yesterday is still under it today, even after its early messages have been 
 each was touched and how many rounds it ran. Type to filter across names and opening lines, and
 press Enter to re-enter one:
 
-<div class="term-shot" role="img" aria-label="The session picker: a searchable list of saved sessions, each showing its name, age, and round count, with the current session marked, above a preview of the highlighted session's id, opening message, and directory."><span class="fs-divider">──── Sessions ─────────────────────────────</span><span class="fs-sel">&gt; port the tool runner to asyncio<span class="fs-i fs-dim">  ·  2h ago · 14 rounds</span></span><span class="fs-dim">  split the large test modules<span class="fs-i fs-dim">  ·  yesterday · 31 rounds</span></span><span class="fs-dim">  fix the fd leak in MCPFileTokenStore<span class="fs-i fs-dim">  ·  3d ago · 1 round</span></span><span class="fs-dim">  what I am doing right now<span class="fs-i fs-dim">  ·  just now · 2 rounds · current</span></span><span> </span><span class="fs-dim">  uid   20260728074943-e22e69e8-070</span><span class="fs-dim">  start port the tool runner to asyncio, starting with Bash</span><span class="fs-dim">  where ~/dev/github/minacode</span><span> </span><span class="fs-hint">  ↑/↓ or j/k move · / search · Enter open · Esc close</span></div>
+<div class="term-shot" role="img" aria-label="The session picker: a searchable list of saved sessions, each showing its name, age, and round count, with the current session marked, above a preview of the highlighted session's id, opening message, and directory."><span class="fs-divider">──── Sessions ─────────────────────────────</span><span class="fs-sel">&gt; port the tool runner to asyncio<span class="fs-i fs-dim">  ·  2h ago · 14 rounds</span></span><span class="fs-dim">  split the large test modules<span class="fs-i fs-dim">  ·  yesterday · 31 rounds</span></span><span class="fs-dim">  fix the fd leak in MCPFileTokenStore<span class="fs-i fs-dim">  ·  3d ago · 1 round</span></span><span class="fs-dim">  what I am doing right now<span class="fs-i fs-dim">  ·  just now · 2 rounds · current</span></span><span> </span><span class="fs-dim">  uid   20260728074943-e22e69e8-070</span><span class="fs-dim">  start port the tool runner to asyncio, starting with Bash</span><span class="fs-dim">  where ~/dev/github/yucode</span><span> </span><span class="fs-hint">  ↑/↓ or j/k move · / search · Enter open · Esc close</span></div>
 
 `/sessions all` widens the list past the current project, adding each session's directory to its
 row. Choosing a session ends the current one — it is saved first — and starts the next in its
 place, exactly as if you had launched with `--resume`. Choosing the session you are already in, or
 pressing `Esc`, changes nothing.
 
-Run it from the prompt between turns. While the agent is working, minacode says so and asks you to
+Run it from the prompt between turns. While the agent is working, yucode says so and asks you to
 press `Ctrl-C` first: switching sessions mid-turn would abandon a request already in flight.
 
 Sessions saved before names existed list under their id until the next time they are saved.
@@ -211,7 +211,7 @@ Sessions saved before names existed list under their id until the next time they
 
 Navigate with `j`/`k`, `g`/`G`, and `/` search; press `Esc` to close.
 
-```{figure} ../snapshots/minacode-diff-list.png
+```{figure} ../snapshots/yucode-diff-list.png
 :alt: Interactive diff list showing changed files from the latest turn
 :width: 600px
 :align: center
@@ -219,7 +219,7 @@ Navigate with `j`/`k`, `g`/`G`, and `/` search; press `Esc` to close.
 Choosing a file to diff.
 ```
 
-```{figure} ../snapshots/minacode-diff-file-detail.png
+```{figure} ../snapshots/yucode-diff-file-detail.png
 :alt: Side-by-side file diff with syntax highlighting
 :width: 600px
 :align: center
@@ -229,6 +229,6 @@ Side-by-side detail view of a changed file.
 
 ### Long sessions
 
-minacode keeps long conversations within a working budget on its own, summarizing older
+yucode keeps long conversations within a working budget on its own, summarizing older
 context as needed so a session can run indefinitely. Run `/compact` to trim it now, or
 `/status` to see current context and token usage.

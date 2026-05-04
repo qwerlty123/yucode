@@ -6,9 +6,9 @@ from types import SimpleNamespace
 import pytest
 from model_harness import _MockClientFactory, _session, _StreamClientFactory
 
-from minacode.base import SESSION_EVENT_KEY, ModelError, ModelOutputTruncated, ToolCall
-from minacode.model import ModelClient
-from minacode.tools import BashTool
+from yucode.base import SESSION_EVENT_KEY, ModelError, ModelOutputTruncated, ToolCall
+from yucode.model import ModelClient
+from yucode.tools import BashTool
 
 
 def test_responses_request_preserves_output_items_and_uses_responses_shape(tmp_path, monkeypatch):
@@ -714,7 +714,7 @@ def test_responses_replay_drops_reasoning_items_that_carry_no_payload(tmp_path):
 def test_no_protocol_sends_another_protocols_saved_reply(tmp_path, monkeypatch):
     """`/provider` can switch protocols mid-session, so history holds assistant turns produced by
     a protocol other than the one now in use. Each protocol replays only its own saved reply and
-    never puts minacode's bookkeeping keys on the wire."""
+    never puts yucode's bookkeeping keys on the wire."""
     history = [
         {"role": "user", "content": "hi"},
         {"role": "assistant", "content": "from responses", "_responses_output": [{"id": "rs_1", "type": "reasoning", "encrypted_content": "opaque"}]},

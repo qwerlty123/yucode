@@ -18,22 +18,22 @@ from prompt_toolkit.keys import Keys
 from prompt_toolkit.output import DummyOutput
 from tui_harness import ResizableOutput, loop, rendered_screen_text, run_interactive_tui, session, wait_until
 
-import minacode.tui as tui_module
-from minacode import hints
-from minacode.base import (
+import yucode.tui as tui_module
+from yucode import hints
+from yucode.base import (
     SESSION_EVENT_KEY,
     Config,
     LogBlock,
     LogEdge,
 )
-from minacode.engine import Agent
-from minacode.hints import HintPicker
-from minacode.loop import CommandCompleter, CommandLoop, TuiRuntime
-from minacode.prompts import LIVE_FOLLOWUP_PREFIX
-from minacode.session import Session, SessionSnapshotStore
-from minacode.tools import CodeIndex
-from minacode.tui import TUI_MODAL_PENDING, CallbackPlaceholder, TuiApp
-from minacode.update import UpdateChecker
+from yucode.engine import Agent
+from yucode.hints import HintPicker
+from yucode.loop import CommandCompleter, CommandLoop, TuiRuntime
+from yucode.prompts import LIVE_FOLLOWUP_PREFIX
+from yucode.session import Session, SessionSnapshotStore
+from yucode.tools import CodeIndex
+from yucode.tui import TUI_MODAL_PENDING, CallbackPlaceholder, TuiApp
+from yucode.update import UpdateChecker
 
 
 def ctrl_c_queue_scenario(cwd, results):
@@ -426,7 +426,7 @@ def test_tui_ctrl_d_emits_resume_command_without_alternate_screen(tmp_path, monk
         assert command_loop.run_tui() == 0
         driver.join(timeout=1)
 
-    assert any(f"minacode --resume {scenario_session.uid}" in line for line in output)
+    assert any(f"yucode --resume {scenario_session.uid}" in line for line in output)
     assert full_screen_modes == [False]
     assert tui_daemon == [False]
 

@@ -1,15 +1,15 @@
 PYTHON ?= python3
 VERSION := $(shell $(PYTHON) -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
-DIST_FILES := dist/minacode-$(VERSION)*
+DIST_FILES := dist/yucode-$(VERSION)*
 
 .PHONY: lint test clean-dist build publish-check publish
 
 lint:
-	$(PYTHON) -m ruff check minacode
-	$(PYTHON) -m ruff format --check minacode
+	$(PYTHON) -m ruff check yucode
+	$(PYTHON) -m ruff format --check yucode
 
 test:
-	$(PYTHON) -m compileall -q minacode
+	$(PYTHON) -m compileall -q yucode
 	$(PYTHON) -m pytest
 
 clean-dist:

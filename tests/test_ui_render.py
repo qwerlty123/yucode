@@ -12,8 +12,8 @@ from prompt_toolkit.utils import get_cwidth
 from rich.console import Console
 from tui_harness import loop, session
 
-import minacode.render as render_module
-from minacode.base import (
+import yucode.render as render_module
+from yucode.base import (
     SELECTION_BACK,
     SELECTION_FREE_TEXT,
     LogBlock,
@@ -22,8 +22,8 @@ from minacode.base import (
     Text,
     request_budget_for,
 )
-from minacode.render import BashLivePreview, StatusBar, Theme, UiPrinter
-from minacode.tui import TUI_MODAL_PENDING, ChoiceViewState, TuiApp
+from yucode.render import BashLivePreview, StatusBar, Theme, UiPrinter
+from yucode.tui import TUI_MODAL_PENDING, ChoiceViewState, TuiApp
 
 
 def test_theme_palettes_have_identical_complete_keys():
@@ -191,7 +191,7 @@ def test_interactive_renderer_keeps_theme_when_parent_exports_no_color(monkeypat
     monkeypatch.setattr(render_module, "print_formatted_text", lambda value, **_kwargs: emitted.extend(to_formatted_text(value)))
 
     ui = UiPrinter()
-    # Interactive TTY output stays colored regardless of NO_COLOR — minacode owns its theming and
+    # Interactive TTY output stays colored regardless of NO_COLOR — yucode owns its theming and
     # renders through prompt_toolkit's ANSI path, so the parent env var is not honored.
     assert ui.color
     ui.emit_answer("sent message", role="user", rule=False)

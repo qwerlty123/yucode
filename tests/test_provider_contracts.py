@@ -8,8 +8,8 @@ import pytest
 from model_harness import _AnthropicMockClientFactory, _MockClientFactory, _session
 from provider_cases import PROVIDER_CONTRACTS, ProviderContract
 
-from minacode.model import ModelClient
-from minacode.model_catalog import PROVIDER_CATALOG
+from yucode.model import ModelClient
+from yucode.model_catalog import PROVIDER_CATALOG
 
 
 def _chat_response(model: str) -> dict:

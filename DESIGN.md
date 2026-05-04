@@ -5,7 +5,7 @@ short: document durable conclusions, not implementation diaries or complete inve
 
 ## Orientation
 
-minacode turns one user request into a bounded loop of model calls and tool calls, in one local
+yucode turns one user request into a bounded loop of model calls and tool calls, in one local
 process. Four objectives explain most of the decisions below, and they are frequently in tension:
 
 1. **Resumable.** A session survives a crash, an interrupt, or a quit at any point.
@@ -191,7 +191,7 @@ state. MCP is moving toward a sessionless protocol with explicit state handles
 ([SEP-2567](https://modelcontextprotocol.io/seps/2567-sessionless-mcp)); protocol negotiation and
 server-specific compatibility remain the client library's responsibility. Keep the current FastMCP
 3 dependency until the modern protocol support is stable, and do not add roots, sampling, extension,
-or provider-specific machinery without a demonstrated minacode use case.
+or provider-specific machinery without a demonstrated yucode use case.
 
 ## Turn execution and authority
 

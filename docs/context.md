@@ -1,6 +1,6 @@
 # Context and caching
 
-Each request contains more than the latest message. minacode puts stable session context first,
+Each request contains more than the latest message. yucode puts stable session context first,
 then sends one append-only conversation log. This keeps the agent informed while giving supported
 providers exact earlier user and tool boundaries to reuse.
 
@@ -17,14 +17,14 @@ Tool definitions are sent beside this message stack: built-in tools, `Skill` whe
 installed, and MCP tools and resources from <span class="marker">currently connected servers</span>.
 Configured but disconnected servers do not consume context.
 
-When a model exposes reasoning, minacode keeps the returned protocol data in the session but only
+When a model exposes reasoning, yucode keeps the returned protocol data in the session but only
 replays what the active provider expects. Some APIs require preserved reasoning across turns;
 others ignore old reasoning unless a preserved-thinking option is enabled, while still needing it
 inside a multi-step tool call. Opaque signatures and encrypted reasoning are returned unchanged
 when their protocol requires them, but are not shown as model-readable text.
 
 When [provider-side search](tools.md#provider-side-tools) is enabled, the pages it reads are added
-to the context by the provider rather than by minacode, so they are not shortened and the context
+to the context by the provider rather than by yucode, so they are not shortened and the context
 fill cannot predict them: a turn that searches arrives larger than one that does not, and most
 providers charge for the search on top of the tokens.
 
@@ -36,7 +36,7 @@ with references to their first full copy instead of being sent in full again.
 
 ### Compaction
 
-As the estimated request approaches `runtime.max_context_tokens`, minacode **compacts**: the older
+As the estimated request approaches `runtime.max_context_tokens`, yucode **compacts**: the older
 part of the conversation is replaced by a short summary, and the most recent messages are kept as
 they are. The estimate uses the effective Chat, Responses, or Anthropic request, so reasoning that
 the provider will discard does not cause early compaction. The trigger reserves the configured
@@ -76,8 +76,8 @@ an MCP server, installing a skill, switching models, enabling a provider-side to
 reusable prefix. That is why
 the stable sections are placed first.
 
-OpenAI-compatible providers may reuse matching prefixes automatically; minacode supplies a stable
-cache key where the provider supports one. For Anthropic, minacode explicitly marks the tools and
+OpenAI-compatible providers may reuse matching prefixes automatically; yucode supplies a stable
+cache key where the provider supports one. For Anthropic, yucode explicitly marks the tools and
 system instructions as an ephemeral cacheable prefix. Provider support and accounting differ.
 
 ### Checking the hit rate
