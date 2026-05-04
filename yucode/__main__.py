@@ -21,7 +21,7 @@ from yucode.update import UpdateChecker
 
 
 def run_update() -> int:
-    """检查 PyPI 上是否有更新的 yucode,并通过检测到的包管理器升级。"""
+    """检查 GitHub 上是否有更新的 yucode,并通过检测到的包管理器升级。"""
     print(f"yucode {__version__}")
     try:
         latest = UpdateChecker.fetch_latest()

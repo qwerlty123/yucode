@@ -1,4 +1,8 @@
-"""yucode 更新检查:后台 PyPI 版本探测及其缓存状态。"""
+"""yucode 更新检查:后台 GitHub 版本探测及其缓存状态。
+
+yucode 不经 PyPI 发布,而是通过 `uv tool install git+https://github.com/qwerlty123/yucode.git`
+从 GitHub 安装;这里通过 raw 文件探测上游 `pyproject.toml` 的版本号,提醒用户升级。
+"""
 
 from __future__ import annotations
 
@@ -8,6 +12,7 @@ import os
 import sys
 import threading
 import time
+import tomllib
 from urllib.request import Request, urlopen
 
 from yucode.base import (
@@ -21,7 +26,7 @@ from yucode.session import Session
 
 
 class UpdateChecker:
-    PYPI_URL = "https://pypi.org/pypi/yucode/json"
+    GITHUB_PYPROJECT_URL = "https://raw.githubusercontent.com/qwerlty123/yucode/master/pyproject.toml"
     CACHE_FILE = "update.json"
     TIMEOUT = 5
     INTERVAL_SECONDS = 24 * 3600  # 两次探测之间的最小间隔:24 小时
@@ -65,12 +70,15 @@ class UpdateChecker:
 
     @staticmethod
     def fetch_latest() -> str:
-        request = Request(UpdateChecker.PYPI_URL, headers={"Accept": "application/json", "User-Agent": HTTP_USER_AGENT})
+        request = Request(UpdateChecker.GITHUB_PYPROJECT_URL, headers={"User-Agent": HTTP_USER_AGENT})
         with urlopen(request, timeout=UpdateChecker.TIMEOUT) as response:
-            data = json.loads(response.read().decode("utf-8", "replace"))
-        version = data.get("info", {}).get("version") if isinstance(data, dict) else ""
+            text = response.read().decode("utf-8", "replace")
+        try:
+            version = tomllib.loads(text).get("project", {}).get("version", "")
+        except tomllib.TOMLDecodeError as error:
+            raise YucodeError("invalid pyproject version response") from error
         if not isinstance(version, str) or not UpdateStatus.version_tuple(version):
-            raise YucodeError("invalid PyPI version response")
+            raise YucodeError("invalid pyproject version response")
         return version
 
     def status_line(self) -> str:
@@ -91,4 +99,5 @@ class UpdateChecker:
             return ["uv", "tool", "upgrade", "yucode"]
         if "/pipx/venvs/" in executable:
             return ["pipx", "upgrade", "yucode"]
-        return [sys.executable, "-m", "pip", "install", "--upgrade", "yucode"]
+        # 兜底:未经 uv/pipx 的安装没有可识别的升级命令,按 GitHub 源升级。
+        return [sys.executable, "-m", "pip", "install", "--upgrade", "git+https://github.com/qwerlty123/yucode.git"]

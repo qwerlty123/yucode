@@ -27,7 +27,7 @@ when you need isolation. See [Safety](safety.md).
 ## Install and run
 
 ```sh
-uv tool install yucode
+uv tool install git+https://github.com/qwerlty123/yucode.git
 yucode --init-config          # write ~/.yucode/config.toml
 # add your provider's url, key, and model to that file
 yucode

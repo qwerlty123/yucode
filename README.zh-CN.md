@@ -44,7 +44,7 @@ yucode 即原来的 minacode（再之前是 nanocode）。它最初是一个小�
 需要 macOS 或 Linux、Python 3.11+ 和 [uv](https://docs.astral.sh/uv/)。
 
 ```sh
-uv tool install yucode
+uv tool install git+https://github.com/qwerlty123/yucode.git
 yucode --init-config
 ```
 
@@ -66,7 +66,7 @@ model = "deepseek-v4-flash"
 yucode
 ```
 
-升级：`uv tool upgrade yucode`。
+升级：`uv tool upgrade yucode`，从仓库拉取最新提交。
 
 ## 链接
 

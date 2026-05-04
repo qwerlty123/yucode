@@ -7,7 +7,7 @@
 - [uv](https://docs.astral.sh/uv/) to install and run
 
 ```sh
-uv tool install yucode
+uv tool install git+https://github.com/qwerlty123/yucode.git
 ```
 
 ### Upgrade
@@ -16,8 +16,8 @@ uv tool install yucode
 uv tool upgrade yucode
 ```
 
-yucode checks PyPI at most once a day and reports an available update at startup and in
-`/status`.
+yucode checks the GitHub repository at most once a day (comparing the version in
+`pyproject.toml`) and reports an available update at startup and in `/status`.
 
 ## Configure
 

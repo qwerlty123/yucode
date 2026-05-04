@@ -1337,7 +1337,7 @@ def test_update_checker_fetch_latest_uses_bounded_timeout(tmp_path, monkeypatch)
             pass
 
         def read(self):
-            return b'{"info":{"version":"9.8.7"}}'
+            return b'[project]\nversion = "9.8.7"\n'
 
     def fake_urlopen(request, timeout):
         seen["timeout"] = timeout

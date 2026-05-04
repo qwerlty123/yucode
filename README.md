@@ -44,7 +44,7 @@ yucode was formerly minacode (and nanocode before that). It started as a single-
 Requires macOS or Linux, Python 3.11+, and [uv](https://docs.astral.sh/uv/).
 
 ```sh
-uv tool install yucode
+uv tool install git+https://github.com/qwerlty123/yucode.git
 yucode --init-config
 ```
 
@@ -66,7 +66,8 @@ Then run:
 yucode
 ```
 
-Upgrade with `uv tool upgrade yucode`.
+Upgrade with `uv tool upgrade yucode`, which pulls the latest commit from the
+repository.
 
 ## Links
 

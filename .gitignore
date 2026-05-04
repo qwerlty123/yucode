@@ -1,6 +1,7 @@
 build
 docs/_build/
 docs/locale/**/*.mo
+docs/learning/
 demo*/
 *.egg-info
 __pycache__/

@@ -164,12 +164,12 @@ def test_upgrade_command_detects_installer(monkeypatch, executable, expected):
     assert cli.UpdateChecker.upgrade_command() == expected
 
 
-def test_upgrade_command_falls_back_to_pip(monkeypatch):
+def test_upgrade_command_falls_back_to_git_source(monkeypatch):
     executable = "/home/u/venvs/foo/bin/python"
     monkeypatch.setattr(cli.sys, "executable", executable)
     monkeypatch.setattr(cli.os.path, "realpath", lambda path: path)
 
-    assert cli.UpdateChecker.upgrade_command() == [executable, "-m", "pip", "install", "--upgrade", "yucode"]
+    assert cli.UpdateChecker.upgrade_command() == [executable, "-m", "pip", "install", "--upgrade", "git+https://github.com/qwerlty123/yucode.git"]
 
 
 def test_startup_does_not_import_the_provider_sdks():
