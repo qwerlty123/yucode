@@ -1,40 +1,36 @@
-# Getting started
+# 快速上手
 
-## Install
+## 安装
 
-- yucode supports <span class="marker">macOS and Linux only</span>
-- Python 3.11 or newer
-- [uv](https://docs.astral.sh/uv/) to install and run
+- yucode 仅支持 <span class="marker">macOS 和 Linux</span>
+- Python 3.11 或更高版本
+- 用 [uv](https://docs.astral.sh/uv/) 安装和运行
 
 ```sh
 uv tool install git+https://github.com/qwerlty123/yucode.git
 ```
 
-### Upgrade
+### 升级
 
 ```sh
 uv tool upgrade yucode
 ```
 
-yucode checks the GitHub repository at most once a day (comparing the version in
-`pyproject.toml`) and reports an available update at startup and in `/status`.
+yucode 每天最多检查一次 GitHub 仓库（比较 `pyproject.toml` 中的版本），并在启动时和 `/status` 中报告可用更新。
 
-## Configure
+## 配置
 
-yucode needs one thing to start: <span class="marker">a provider to talk to</span>. Generate a
-starter config:
+yucode 启动只需要一件事：<span class="marker">一个可对话的 provider</span>。生成一份初始配置：
 
 ```sh
 yucode --init-config
 ```
 
-This writes `~/.yucode/config.toml`. Only the `[provider]` block is required; every other
-setting has a built-in default, and the file lists the common ones as comments.
+这会写入 `~/.yucode/config.toml`。只有 `[provider]` 块是必需的；其余每个设置都有内置默认值，文件以注释形式列出了常用设置。
 
-### Point it at a provider
+### 指向一个 provider
 
-yucode speaks to any OpenAI-compatible API (and to Anthropic). Open the config and fill in
-a provider — for example [DeepSeek](https://api-docs.deepseek.com/):
+yucode 可与任何 OpenAI 兼容 API（以及 Anthropic）对话。打开配置，填入一个 provider——例如 [DeepSeek](https://api-docs.deepseek.com/)：
 
 ```toml
 [provider]
@@ -46,38 +42,33 @@ key = "sk-..."
 model = "deepseek-v4-flash"
 ```
 
-| Key | Meaning |
+| 键 | 含义 |
 |---|---|
-| `url` | Base URL of the API |
-| `key` | Your API key |
-| `model` | Model name to use |
+| `url` | API 的基础 URL |
+| `key` | 你的 API 密钥 |
+| `model` | 要使用的模型名称 |
 
-You can define several `[provider.<name>]` blocks and switch between them with `active` (or
-`/provider` inside a session). See [Configuration](configuration.md#providers) for optional
-provider, runtime, and data settings.
+你可以定义多个 `[provider.<name>]` 块，并通过 `active`（或在会话内使用 `/provider`）在它们之间切换。可选的 provider、运行时和数据设置参见 [配置](configuration.md#providers)。
 
-## Start a session
+## 开始一个会话
 
 ```sh
 yucode
 ```
 
-Type a request in plain language and the agent starts working — reading files, proposing
-edits, running commands. Before anything that changes files or runs a command, it asks for
-confirmation (unless you pass `--yolo`). You can keep typing while it works; see
-[Follow-ups](usage.md#follow-ups).
+用自然语言输入一个请求，agent 就开始工作——读取文件、提出编辑、运行命令。在做任何修改文件或运行命令的操作之前，它都会请求确认（除非你传了 `--yolo`）。它工作时你可以继续输入；参见 [追问](usage.md#follow-ups)。
 
-Exit with `/exit`, `/quit`, or `Ctrl-D`.
+用 `/exit`、`/quit` 或 `Ctrl-D` 退出。
 
-## Command-line flags
+## 命令行参数
 
-| Flag | Effect |
+| 参数 | 作用 |
 |---|---|
-| `-c`, `--last`, `--latest` | Resume the most recent session in this project |
-| `--resume [UID]` | Resume a saved session; with no `UID`, resumes this project's latest |
-| `--yolo` | Skip confirmation prompts for mutating tools |
-| `--theme {auto,light,dark}` | Override the configured terminal color theme |
-| `--config <path>` | Use a specific config file instead of `~/.yucode/config.toml` |
-| `--init-config` | Write a starter config file and exit |
-| `-h`, `--help` | Show command-line help and exit |
-| `-v`, `--version` | Print the version and exit |
+| `-c`, `--last`, `--latest` | 恢复该项目中最近的会话 |
+| `--resume [UID]` | 恢复已保存的会话；不带 `UID` 时恢复该项目最近的一次 |
+| `--yolo` | 跳过修改型工具的确认提示 |
+| `--theme {auto,light,dark}` | 覆盖已配置的终端配色主题 |
+| `--config <path>` | 使用指定的配置文件，而不是 `~/.yucode/config.toml` |
+| `--init-config` | 写入初始配置文件后退出 |
+| `-h`, `--help` | 显示命令行帮助后退出 |
+| `-v`, `--version` | 打印版本号后退出 |

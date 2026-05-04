@@ -1,32 +1,22 @@
-# Safety
+# 安全
 
-```{admonition} Use at your own risk
+```{admonition} 自行承担风险
 :class: warning
-yucode edits files and runs shell commands in the environment where you start it. It does
-**not** sandbox itself.
+yucode 会在你启动它的环境中编辑文件并运行 shell 命令。它**不会**给自己加沙箱。
 ```
 
-yucode acts directly in your environment. Through its [tools](tools.md) it can
-<span class="marker">read and edit files beyond the working directory and run any shell
-command</span>. There is no built-in isolation, so treat it with the same care as running those
-commands yourself.
+yucode 直接在你的环境中行动。通过它的 [工具](tools.md)，它可以<span class="marker">读取和编辑工作目录之外的文件，并运行任意 shell 命令</span>。没有内置隔离，因此请像自己运行这些命令一样谨慎地对待它。
 
 (built-in-guardrails)=
-## Built-in guardrails
+## 内置护栏
 
-- **Confirmations.** File-changing and command-running tools — Edit, Bash, Job, and MCP
-  calls — ask before they act. <span class="marker">This is on by default</span>; `--yolo` and
-  `/yolo` turn it off.
-- **Anchored edits.** Edits are tied to `line:hash` anchors and rejected if the file changed
-  underneath, so the agent can't silently patch the wrong lines. See
-  [Tools](tools.md).
-- **Reviewable changes.** `/diff` shows exactly what changed this round and across the
-  session before you rely on it.
+- **确认。** 修改文件和运行命令的工具——Edit、Bash、Job 以及 MCP 调用——在行动之前都会询问。<span class="marker">默认开启</span>；`--yolo` 和 `/yolo` 会关闭它。
+- **锚定编辑。** 编辑与 `line:hash` 锚点绑定，如果底层文件发生了变化就会拒绝执行，因此 agent 不会悄悄改错行。参见 [工具](tools.md)。
+- **可审查的变更。** 在你依赖这些变更之前，`/diff` 会精确显示本回合以及整个会话中改了什么。
 
-## Reducing risk
+## 降低风险
 
-- Work inside a **git repository** so every edit is reviewable and reversible.
-- Keep **confirmations on** until you trust a workflow; only reach for `--yolo` when you do.
-- Only connect [MCP](mcp.md) servers you trust — local servers run programs on your machine.
-- For untrusted repositories, or when running unattended, put yucode inside a **container
-  or VM**.
+- 在 **git 仓库**内工作，这样每次编辑都可审查、可回退。
+- 在信任某个工作流之前保持**确认开启**；只有真正信任时才用 `--yolo`。
+- 只连接你信任的 [MCP](mcp.md) 服务器——本地服务器会在你的机器上运行程序。
+- 对于不受信任的仓库，或无人值守运行时，请把 yucode 放进**容器或虚拟机**中。

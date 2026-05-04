@@ -1,20 +1,18 @@
-# Design notes
+# 设计说明
 
-This file records decisions whose rationale is easy to lose and costly to rediscover. Keep it
-short: document durable conclusions, not implementation diaries or complete investigation logs.
+本文件记录那些理由容易丢失、重新发现成本高昂的决策。保持简短：记录持久的结论，而不是实现日记或完整的调查日志。
 
-## Orientation
+<a id="orientation"></a>
+## 概览
 
-yucode turns one user request into a bounded loop of model calls and tool calls, in one local
-process. Four objectives explain most of the decisions below, and they are frequently in tension:
+yucode 在单个本地进程中，把一次用户请求转化为一个由模型调用和工具调用构成的有界循环。下面大部分决策可以用四个目标解释，它们常常相互冲突：
 
-1. **Resumable.** A session survives a crash, an interrupt, or a quit at any point.
-2. **Protocol-neutral.** History is stored in one model; Chat, Responses, and Anthropic formats
-   exist only at the send boundary.
-3. **Bounded.** Context, retained output, and previews all have ceilings; nothing grows forever.
-4. **Truthful.** The screen reports real state, and the terminal's own scrollback stays intact.
+1. **可恢复。** 会话在任意时刻都能经受崩溃、中断或退出。
+2. **协议中立。** 历史记录存储为单一模型；Chat、Responses 和 Anthropic 格式只存在于发送边界。
+3. **有界。** 上下文、保留输出和预览都有上限；没有任何东西无限增长。
+4. **真实。** 屏幕反映真实状态，终端自身的回滚缓冲区保持完整。
 
-Modules, with dependencies pointing downward only:
+模块，依赖只朝下指：
 
 ```
               __main__                     entry, startup ordering
@@ -39,10 +37,9 @@ Modules, with dependencies pointing downward only:
             model_catalog.py               evidence-backed compatibility data
 ```
 
-`session.py` reaches `tools/`, `mcp.py`, and `skill.py` through deferred imports, commented at
-those call sites; that is why features sit above it without a module-scope cycle.
+`session.py` 通过延迟导入触达 `tools/`、`mcp.py` 和 `skill.py`，这些调用点处有注释说明；正因如此，功能模块可以位于它之上而不产生模块级循环。
 
-A turn, and the three ways it can end:
+一个回合，以及它可能结束的三种方式：
 
 ```
   user input
@@ -69,181 +66,105 @@ A turn, and the three ways it can end:
   session.messages    partial + marker       re-raise
 ```
 
-The turn is a transaction: messages accumulate outside durable history until one of those three
-endings. That is what makes resume safe, and why nothing else may append mid-turn.
+回合是一个事务：在三种结局之一发生之前，消息只累积在持久历史之外。这正是恢复安全的原因，也意味着中途中止时不允许任何其他代码追加。
 
-## Common pitfalls
+<a id="common-pitfalls"></a>
+## 常见陷阱
 
-Each of these looks like a cleanup or a small improvement, and each breaks something the code
-depends on. The section naming the rule is in parentheses.
+下面每一条都像是清理工作或小改进，但每一条都会破坏代码所依赖的东西。括号内是提出该规则的章节。
 
-- **Lifting a deferred import to module scope.** Startup latency is a feature; the SDKs cost ~0.8s
-  and are not needed until the first request (Startup path).
-- **Rewriting stored history in a request transform.** Replay rules, image expansion, and schema
-  dedup are send-time only; a resumed session must equal the saved one (Context is a projection).
-- **Returning fewer tool results than the model emitted calls.** Refused, failed, skipped, and
-  interrupted calls each still need a matching result, or replay is invalid (Tool-call lifecycle).
-- **Inserting context between the stable layers.** Saving a few tokens mid-prompt invalidates the
-  cached prefix for every later turn (Context is a projection).
-- **Persisting a live preview row, or reading state back off the screen.** Rendered text is never
-  the source of truth (Three forms of state, Terminal boundary).
-- **Expecting compaction to rescue an oversized fixed prefix.** It cannot; bound the source at its
-  owner or fail clearly (Compaction).
-- **Retrying a failure that is not transient.** Cancellation, capability rejection, and validation
-  errors are decisions, not glitches (Failure boundaries).
-- **Mocking the behavior under test instead of the external boundary** (Test design).
+- **把延迟导入提升到模块作用域。** 启动延迟是特性；SDK 大约需要 0.8s，并且直到第一次请求才需要（启动路径）。
+- **在请求变换中改写已存储的历史。** 重放规则、图片展开和 schema 去重只在发送时生效；恢复的会话必须与保存的一致（上下文是一种投影）。
+- **返回的工具结果少于模型发出的调用。** 被拒绝、失败、跳过和中断的调用仍然各需要一个匹配的结果，否则重放无效（工具调用生命周期）。
+- **在稳定层之间插入上下文。** 在提示中间节省几个 token 会使之后每一回合的缓存前缀失效（上下文是一种投影）。
+- **持久化实时预览行，或从屏幕上读回状态。** 渲染出的文本永远不是事实来源（状态的三种形态、终端边界）。
+- **指望压缩拯救一个过大的固定前缀。** 压缩做不到；在拥有者处约束来源，或明确失败（压缩）。
+- **重试并非瞬时性的失败。** 取消、能力拒绝和校验错误是决策，不是故障（失败边界）。
+- **模拟被测行为而不是外部边界**（测试设计）。
 
-## Maintenance
+## 维护
 
-- Docstrings describe interfaces and contracts, not development history.
-- Comments protect local, non-obvious invariants and may link to primary evidence.
-- Add a note here only for a cross-cutting decision that future maintainers may otherwise reopen.
-  If a decision changes, keep the old conclusion visible and mark it as superseded.
+- 文档字符串描述接口与契约，而不是开发历史。
+- 注释保护局部的、不明显的不可变约束，并可以链接到主要证据。
+- 只有跨切面、未来维护者可能重新争论的决策，才在这里加一条说明。如果决策发生变化，保留旧结论并标记为已取代。
 
-### Engineering posture
+### 工程准则
 
-- **Abstract:** Use deep, local, earned abstractions that hide real complexity behind small
-  interfaces; remove dead code and pass-through wrappers, and keep a private helper with its owner.
-- **Layer:** Keep dependencies directed from higher-level orchestration toward stable lower-level
-  concepts; lower modules never import presentation or orchestration layers.
-- **Keep it simple:** Choose the smallest cohesive, behavior-preserving implementation, avoid
-  speculative specialization, separate unrelated changes, and keep the changelog aligned.
-- Prefer a generic standards path. Specialize only for a necessary, documented incompatibility,
-  and keep primary evidence beside the rule.
-- Prefer explicit imports and pragmatic typing: model domain shapes precisely, keep JSON as
-  `dict[str, Any]`, and suppress a type error only when runtime behavior is demonstrably safe.
-- Test contracts and reproduced regressions at their boundaries, not private spelling or prompt
-  literals. CI enforces formatting, lint, typing, and the full suite.
-- Keep UI and user documentation quiet and direct. Show truthful state with progressive detail;
-  keep compatibility machinery and investigation history out of the common user path.
+- **抽象：** 使用深的、局部的、经得起验证的抽象，用小的接口隐藏真实复杂度；删除死代码和透传包装，让私有辅助函数跟随其拥有者。
+- **分层：** 让依赖从高层编排指向稳定的底层概念；下层模块绝不导入展示层或编排层。
+- **保持简单：** 选择最小的一致且保持行为的实现，避免投机性特化，分离无关的改动，并保持变更日志对齐。
+- 优先走通用的标准路径。只为必要的、有文档的不兼容性做特化，并把主要证据放在规则旁边。
+- 偏好显式导入和务实的类型标注：精确建模领域形状，JSON 保持 `dict[str, Any]`，只在运行时行为被证明安全时才抑制类型错误。
+- 在边界处测试契约和复现的回归，而不是私有写法或提示词字面量。CI 强制格式、lint、类型检查和完整测试套件。
+- 保持 UI 和用户文档安静直接。展示真实状态并渐进细化；把兼容性机制和调查历史挡在普通用户路径之外。
 
-### Test design
+### 测试设计
 
-Tests protect observable contracts and reproduced regressions, not implementation shape.
+测试保护可观察的契约和复现的回归，而不是实现形态。
 
-- Prefer black-box tests through the narrowest stable public boundary that observes the complete
-  behavior. Use white-box tests only when a pure algorithm or difficult edge condition cannot be
-  exercised clearly there.
-- A bug fix should reproduce the real failure, then cover the intended result and any unsafe path
-  that must remain rejected.
-- Assert semantic output, durable state, or protocol payloads. Assert exact text, call order, or
-  rendering only when those details are themselves the contract.
-- Mock external or nondeterministic boundaries such as providers, clocks, processes, and terminals;
-  do not mock the core behavior under test.
-- Keep tests deterministic and fast. Replace sleeps with events or controlled time, and reserve
-  PTY or tmux tests for behavior that truly depends on a terminal.
+- 优先通过能观察到完整行为的最窄稳定公共边界做黑盒测试。只有当纯算法或困难的边界条件无法在那里清晰演练时，才使用白盒测试。
+- 修复 bug 应复现真实失败，然后覆盖预期结果和必须保持拒绝的任何不安全路径。
+- 断言语义输出、持久状态或协议载荷。只有当精确文本、调用顺序或渲染本身即是契约时，才去断言它们。
+- 模拟外部或非确定性边界，如 provider、时钟、进程和终端；不要模拟被测的核心行为。
+- 保持测试确定且快速。用事件或受控时间替代 sleep，把 PTY 或 tmux 测试留给真正依赖终端的场景。
 
-## System shape
+## 系统结构
 
-One local process with explicit owners for each kind of behavior. The layers are drawn in
-[Orientation](#orientation); this section records what each owner is responsible for.
+单个本地进程，每种行为都有明确的拥有者。分层画在 [概览](#orientation) 中；本节记录每个拥有者负责什么。
 
-- `base.py` defines configuration, shared value types, and error categories, including the log-line
-  vocabulary every presentation layer renders and the resource handles they cancel through;
-  `provider_compat.py` folds the evidence-backed model and provider data in `model_catalog.py` into
-  resolved request policy.
-- `Session` owns protocol-neutral semantic state: messages, active-turn checkpoints, queued input,
-  retained output, diffs, usage, and session-scoped resources such as jobs and images. Its snapshot
-  codec decides which of that state is persistable.
-- Agent semantics are split by owner: `context.py` builds and compacts the model-facing context,
-  `model.py` owns provider protocol adapters, streaming, and retry policy, `runner.py` owns tool
-  execution and cancellation, and `engine.py` composes them into the turn loop with its commit or
-  rollback. They depend downward only: `engine.py` -> `context.py`/`runner.py` -> `model.py` ->
-  `base.py`, so no pair needs a deferred import to break a cycle.
-- `CommandLoop` and `TuiRuntime` orchestrate commands and runtime transitions. `TuiApp` owns input,
-  key bindings, layout, and modals; `render.py` owns transcript and status presentation.
-- `tools/`, `image.py`, `mcp.py`, and `skill.py` are vertical feature modules. They expose useful
-  behavior to the engine without making the engine understand their storage or UI details. Inside
-  `tools/`, each module owns one capability (files, search, shell, memory, ask, plugin) over the
-  shared `Tool` base; `__init__.py` owns the registry and is the package's only import surface.
+- `base.py` 定义配置、共享值类型和错误分类，包括每个展示层都要渲染的日志行词汇，以及它们通过句柄取消的资源；`provider_compat.py` 把 `model_catalog.py` 中基于证据的模型和 provider 数据折叠为已解析的请求策略。
+- `Session` 持有协议中立的语义状态：消息、活动回合检查点、排队输入、保留输出、diff、用量，以及作业和图片等会话级资源。其快照编解码器决定该状态中哪些部分可持久化。
+- Agent 语义按拥有者拆分：`context.py` 构建并压缩模型面对的上下文，`model.py` 拥有 provider 协议适配器、流式与重试策略，`runner.py` 拥有工具执行与取消，`engine.py` 把它们组合进带提交或回滚的回合循环。它们只向下依赖：`engine.py` -> `context.py`/`runner.py` -> `model.py` -> `base.py`，因此没有任何一对需要延迟导入来打破循环。
+- `CommandLoop` 和 `TuiRuntime` 编排命令与运行时迁移。`TuiApp` 拥有输入、键绑定、布局和模态框；`render.py` 拥有转录与状态展示。
+- `tools/`、`image.py`、`mcp.py` 和 `skill.py` 是纵向功能模块。它们把有用的行为暴露给引擎，而不让引擎理解它们的存储或 UI 细节。在 `tools/` 内部，每个模块在共享的 `Tool` 基类之上拥有一种能力（文件、搜索、shell、记忆、ask、插件）；`__init__.py` 拥有注册表，是该包唯一的导入面。
 
-State changes belong to the module that owns their meaning. Higher layers may request a transition
-or observe it through callbacks, but rendered text and widget state are never the source of truth.
-Dependencies point toward stable concepts: configuration and value types do not know the runtime;
-feature and session modules do not know the command loop or terminal; orchestration composes them at
-the boundary. Do not introduce a shared module merely to break a cycle—fix the ownership instead.
+状态变更归属于拥有其含义的模块。高层可以请求一次迁移，或通过回调观察它，但渲染文本和控件状态永远不是事实来源。依赖指向稳定概念：配置和值类型不认识运行时；功能模块和会话模块不认识命令循环或终端；编排在边界处组合它们。不要仅仅为了打破循环而引入共享模块——去修正归属。
 
-### Startup path
+### 启动路径
 
-Nothing a first keystroke does not need may be imported at startup. Interactive startup was once
-939ms, of which 934ms was imports and 5ms was work; the prompt could not echo a character until it
-finished. The heavy third-party SDKs are therefore imported at their point of use, not at module
-scope: `MCPManager` defers `fastmcp` (~0.35s) and `ModelClient` defers `anthropic` and `openai`
-(~0.8s together), each declaring the names under `TYPE_CHECKING` so annotations and type checking
-stay complete. Do not lift these back to module scope for tidiness; that is the regression, and
-`tests/test_cli.py` asserts a fresh interpreter loads neither SDK.
+启动时不得导入任何第一次按键不需要的东西。交互式启动曾经耗时 939ms，其中 934ms 是导入、5ms 是实际工作；在导入完成之前，提示符连一个字符都无法回显。因此，重量级第三方 SDK 在使用点导入，而不是在模块作用域导入：`MCPManager` 延迟 `fastmcp`（约 0.35s），`ModelClient` 延迟 `anthropic` 和 `openai`（合计约 0.8s），各自在 `TYPE_CHECKING` 下声明这些名字，以保证注解和类型检查仍然完整。不要为了整洁把它们提升回模块作用域——那正是回归，`tests/test_cli.py` 断言全新的解释器不会加载这两个 SDK。
 
-`main` then warms the deferred SDKs on a daemon thread so the deferral does not simply move the
-cost onto the first request. Racing that thread is safe because CPython locks imports per module;
-the reasoning and its limits are recorded on `warm_provider_sdks`, beside the code that depends on
-them.
+然后 `main` 在守护线程上预热延迟的 SDK，这样延迟并不会简单地把成本挪到第一次请求上。与该线程竞争是安全的，因为 CPython 按模块对导入加锁；这个推理及其局限记录在 `warm_provider_sdks` 上，就在依赖它们的代码旁边。
 
-### Future MCP client lifecycle
+### 未来的 MCP 客户端生命周期
 
-`MCPManager` currently opens a short-lived client for each discovery, tool, or resource operation.
-This is sufficient for stateless servers, but repeatedly starts stdio processes, prevents transport
-reuse, and cannot preserve legacy servers that rely on process-lifetime state. A future MCP revision
-should evaluate one managed client runtime per configured server, with explicit connect, reconnect,
-cancellation, and close ownership.
+`MCPManager` 目前为每次发现、工具或资源操作打开一个短生命周期客户端。这对无状态服务器足够，但会反复启动 stdio 进程、阻止传输复用，也无法保留依赖进程生命周期状态的旧服务器。未来的 MCP 修订版应该为每个配置的服务器评估一个受管客户端运行时，并明确 connect、reconnect、cancellation 和 close 的归属。
 
-That runtime would reuse transport resources without treating an MCP connection as durable semantic
-state. MCP is moving toward a sessionless protocol with explicit state handles
-([SEP-2567](https://modelcontextprotocol.io/seps/2567-sessionless-mcp)); protocol negotiation and
-server-specific compatibility remain the client library's responsibility. Keep the current FastMCP
-3 dependency until the modern protocol support is stable, and do not add roots, sampling, extension,
-or provider-specific machinery without a demonstrated yucode use case.
+该运行时会复用传输资源，而不把 MCP 连接当作持久的语义状态。MCP 正走向带显式状态句柄的无会话协议（[SEP-2567](https://modelcontextprotocol.io/seps/2567-sessionless-mcp)）；协议协商与服务器特定的兼容性仍是客户端库的责任。在现代协议支持稳定之前，保持当前的 FastMCP 3 依赖；没有实际证明的 yucode 用例，不要添加 roots、sampling、扩展或 provider 特定机制。
 
-## Turn execution and authority
+## 回合执行与授权
 
-One agent turn is a bounded state machine; see [Orientation](#orientation) for its shape.
+一个 agent 回合是一个有界状态机；其形态见 [概览](#orientation)。
 
-- The user's request defines authority for the entire turn. A model may propose work, but model text,
-  a plan, or an inferred next step cannot broaden that authority; tool validation and approval remain
-  runtime responsibilities.
-- The agent loop is the serialized writer of active-turn messages. TUI and background workers cross
-  that boundary through queues, callbacks, and cancellation signals rather than editing the turn.
-- Treat a completed request, an ordered tool-result batch, and turn completion as coherent transition
-  boundaries. UI progress may lead them, but resume must restart from a protocol-valid sequence.
+- 用户的请求定义整个回合的授权。模型可以提出工作建议，但模型文本、计划或推断出的下一步都不能扩大该授权；工具校验和审批仍是运行时职责。
+- agent 循环是活动回合消息的串行写入者。TUI 和后台工作线程通过队列、回调和取消信号跨越该边界，而不是直接编辑回合。
+- 把已完成的请求、有序的工具结果批次和回合完成视为连贯的迁移边界。UI 进度可以超前，但恢复必须从一个协议合法的序列重新开始。
 
-## Three forms of state
+## 状态的三种形态
 
-Keep these forms separate even when they contain similar data:
+即使包含相似数据，也要保持这三种形态分离：
 
-1. **Durable session state** records what semantically happened and is sufficient to resume.
-2. **Request projection** adapts that state to one model, protocol, and context budget.
-3. **Ephemeral UI state** covers drafts, live previews, animation, selection, and modal layout.
+1. **持久会话状态**记录语义上发生了什么，且足以恢复。
+2. **请求投影**把该状态适配为一个模型、一个协议和一个上下文预算。
+3. **临时 UI 状态**涵盖草稿、实时预览、动画、选择和模态布局。
 
-Only the first form is snapshotted. Provider clients, timers, stream fragments, and terminal layout
-are reconstructed. A live preview may disappear without changing history; completed transcript is
-always derived from semantic records rather than preview rows.
+只有第一种形态会被快照。provider 客户端、定时器、流片段和终端布局都是重建出来的。实时预览可能消失而不改变历史；已完成的转录总是由语义记录派生，而不是由预览行派生。
 
-## Provider and protocol boundary
+## provider 与协议边界
 
-Configuration expresses user intent. `ProviderConfig.resolve()` is the single fold where explicit
-settings and evidence-backed compatibility become a `ResolvedProvider`; explicit settings win and
-unknown hosts stay on the generic standards path.
+配置表达用户意图。`ProviderConfig.resolve()` 是唯一把显式设置和基于证据的兼容性折叠成 `ResolvedProvider` 的地方；显式设置优先，未知主机留在通用标准路径上。
 
-- `model_catalog.py` declares provider overlays and reusable model capabilities, with primary
-  evidence beside each exception. `provider_compat.py` owns generic matching and fallback; neither
-  module wraps provider SDKs or lets the catalog become an allowlist for otherwise valid models.
-- `ModelClient` owns the Chat, Responses, and Anthropic wire formats. Session history remains one
-  normalized model with namespaced opaque fields for protocol continuation data.
-- Lifecycle and checkpoint metadata is local bookkeeping, not a provider extension. Adapters strip
-  its namespaced key while preserving the canonical role and content: Chat sends ordinary messages;
-  Responses maps assistant calls and tool results to `function_call` and `function_call_output`
-  items. Provider-specific objects never become the durable state model.
-- Reasoning is continuation data, not one universal text field. Preserve what the provider returns,
-  choose replay policy while projecting a request, and estimate the same effective wire payload.
-- Capability discovery must be conservative and session-local. A successful image request can
-  establish support; only an explicit modality rejection can establish non-support.
+- `model_catalog.py` 声明 provider 叠加与可复用的模型能力，每条例外旁边都有主要证据。`provider_compat.py` 拥有通用匹配与回退；两个模块都不包装 provider SDK，也不让目录变成对本来合法模型的允许列表。
+- `ModelClient` 拥有 Chat、Responses 和 Anthropic 线上格式。会话历史保持为一种归一化模型，带命名空间化的不透明字段存放协议续接数据。
+- 生命周期与检查点元数据是局部记账，不是 provider 扩展。适配器去掉其命名空间化键，同时保留规范的角色与内容：Chat 发送普通消息；Responses 把助手调用和工具结果映射为 `function_call` 和 `function_call_output` 条目。provider 特定对象永远不会成为持久状态模型。
+- 推理是续接数据，不是一种通用文本字段。保留 provider 返回的内容，在投影请求时选择重放策略，并估算相同的有效线上载荷。
+- 能力发现必须保守且限于会话内。一次成功的图片请求可以确立支持；只有显式的模态拒绝才能确立不支持。
 
-## Context is a projection
+## 上下文是一种投影
 
-Session messages are the protocol-neutral source of truth. A model request is derived at the send
-boundary from the system prompt, environment, capability indexes, append-only conversation, active
-turn, and tool schemas.
+会话消息是协议中立的事实来源。模型请求在发送边界由系统提示、环境、能力索引、只追加的对话、活动回合和工具 schema 派生。
 
-- The normal layout is:
+- 常规布局是：
 
   ```
   stable tools + system
@@ -253,185 +174,93 @@ turn, and tool schemas.
   active turn
   ```
 
-  There is no rebuilt Memory, history-index, current-date, recent-error, or code-index-status block
-  inserted before the tail. Those values either already exist in matched tool history, are queried
-  on demand, or are runtime/UI state that does not belong in every model request.
-- Treat cache-prefix stability as the first review criterion for every system prompt, tool schema or
-  ordering, and context-layout change. Order requests from version-stable system and tools, through
-  session-stable capability context and the append-only conversation. Mutable goal, plan, known
-  facts, and checks enter that log through `Note` calls and full compaction checkpoints; never
-  rebuild them as an inserted per-request block. Prefer trigger-local tail additions over
-  conditionally rewriting an earlier layer. Prefix stability never justifies stale state.
-- Apply replay rules, image expansion, request-local reminders, and repeated-schema reduction only
-  while building the request. These transforms must not rewrite stored history or user text.
-- Estimate the payload that will actually cross the selected protocol boundary, including tool
-  schemas and image cost. Reserve output capacity and a safety margin before declaring input space
-  available.
-- Keep estimated request size separate from provider-reported usage. The estimate drives preparation
-  and compaction for the next request; reported prompt, completion, and cached tokens describe calls
-  that already happened and are observability data.
-- Prompt-cache usage is an observed transport optimization, not free context. Cached tokens remain
-  part of the request and compaction pressure. Read and write counts are separate observability
-  fields; absence of provider-reported write accounting does not mean no breakpoint was created.
+  结尾之前没有任何重建的 Memory、历史索引、当前日期、近期错误或代码索引状态块。这些值要么已经存在于匹配的工具历史中，要么按需查询，要么是不该进入每次模型请求的运行时/UI 状态。
+- 把缓存前缀稳定性当作每个系统提示、工具 schema 或顺序、以及上下文布局改动的首要评审标准。请求从版本稳定的系统与工具开始排序，经过会话稳定的能力上下文和只追加的对话。可变的目标、计划、已知事实和检查通过 `Note` 调用和完整压缩检查点进入该日志；绝不要把它们重建为逐请求插入的块。优先做触发点局部的尾部追加，而不是条件性重写更早的层。前缀稳定性永远不能为过期状态辩护。
+- 重放规则、图片展开、请求局部提醒和重复 schema 精简只在构建请求时应用。这些变换不得改写已存储的历史或用户文本。
+- 估算实际跨过所选协议边界的载荷，包括工具 schema 和图片成本。在宣布输入空间可用之前，预留输出容量和安全余量。
+- 把估算的请求大小与 provider 报告的用量分开。估算是下一次请求的准备与压缩的驱动；报告的 prompt、completion 和缓存 token 描述已经发生的调用，属于可观测数据。
+- 提示缓存用量是观察到的传输优化，不是免费上下文。缓存 token 仍是请求和压缩压力的一部分。读、写计数是分开的可观测字段；provider 未报告写记账，不代表没有产生断点。
 
-### Cache epochs and breakpoints
+### 缓存代际与断点
 
-Implicit prompt caching is exact-prefix reuse, including tool schemas. A normal turn only appends,
-so an earlier user or tool boundary remains matchable while the newest boundary becomes the next
-write candidate. `Note` updates and resume events obey the same rule; they are conversation, not
-context inserted ahead of conversation.
+隐式提示缓存是精确前缀复用，包括工具 schema。普通回合只追加，因此更早的用户或工具边界保持可匹配，而最新的边界成为下一个写入候选。`Note` 更新和恢复事件遵守同一规则；它们是对话，不是插在对话之前的上下文。
 
-- A stable cache key scopes related requests but does not replace exact-prefix matching or require
-  an explicit provider cache API.
-- Changing the model, tools, system prompt, skills, MCP capabilities, or another early layer may
-  shorten reuse or begin a new scope.
-- Compaction deliberately replaces an old prefix and therefore begins one new cache epoch. The
-  emitted checkpoint is then stable history, so the following turn can warm from it; compaction
-  must not cause every later turn to break again.
-- Anthropic's explicit system breakpoint remains a protocol policy in `ModelClient`; it does not
-  change the protocol-neutral append-only history model used by Chat and Responses.
-- The tool block is part of that prefix, so it is a per-session constant, never a per-request lever.
-  Emptying or reshaping it to steer one response discards the whole cached prefix, moves the request
-  into another cache scope, and reads to the model as a broken tool set: it then reports its tools
-  as unavailable and asks the user to restore them. Steer with a message, never with the schema.
+- 稳定的缓存键限定相关请求的作用域，但不替代精确前缀匹配，也不要求显式的 provider 缓存 API。
+- 改变模型、工具、系统提示、技能、MCP 能力或其他早期层，可能缩短复用或开启新的作用域。
+- 压缩刻意替换旧前缀，因此开启一个新的缓存代际。发出的检查点随后成为稳定历史，下一回合可以从它预热；压缩不得让之后每一回合再次失效。
+- Anthropic 的显式系统断点仍是 `ModelClient` 中的协议策略；它不改变 Chat 和 Responses 使用的协议中立只追加历史模型。
+- 工具块是前缀的一部分，因此它是会话级常量，绝不是逐请求的杠杆。为了引导某次响应而清空或重塑它，会丢弃整个缓存前缀，把请求移入另一个缓存作用域，并在模型眼里表现为一个残缺的工具集：模型会报告工具不可用，并请用户恢复它们。用消息来引导，永远不要用 schema。
 
-### A sent message is irrevocable
+### 已发送的消息不可撤销
 
-Every message that reaches the provider is committed to history in the order it was sent. There is
-no request-local message: nothing may be constructed for one request and then withheld from the
-next one. A message the model answered but can no longer see is ghost context — it explains a
-response that the transcript, the snapshot, and the user can no longer account for.
+每一到达 provider 的消息都按发送顺序提交到历史。不存在请求局部消息：不允许为某次请求构造、却把它从下一次请求中扣留。模型回答过、却再也看不见的消息是幽灵上下文——它解释了转录、快照和用户都无法再对账的一次响应。
 
-- Runtime nudges (live follow-up markers, protocol corrections, resume events) are ordinary
-  conversation. Append them, checkpoint them, and let them age out through compaction like any
-  other message. A marker added for the model is committed with the message it marked; hide it at
-  render time instead, so the scrollback still shows what the user typed.
-- Corrections stack rather than replace. Retrying with the previous correction swapped out rewrites
-  an already-sent prefix, which both loses the record and breaks the cache.
-- An aborted turn keeps what it already sent. Failure settles history; it does not rewind it.
-- The runtime instructs, it does not enforce. When the model ignores an instruction, the loop
-  continues and the next message can say so again; it never reshapes the request to compel an
-  answer.
+- 运行时提示（实时跟进标记、协议修正、恢复事件）是普通对话。追加它、检查点它，让它像其他消息一样通过压缩老化退出。为模型添加的标记与它所标记的消息一起提交；改为在渲染时隐藏它，这样回滚缓冲区仍然显示用户输入的内容。
+- 修正叠加而不是替换。用换掉的旧修正重试，会改写已发送的前缀，既丢失记录又破坏缓存。
+- 被中止的回合保留它已发送的内容。失败落定历史；它不会回退历史。
+- 运行时是指导，不是强制。当模型忽略一条指令时，循环继续，下一条消息可以再说一次；它绝不重塑请求来强迫答案。
 
-## Tool-call lifecycle
+## 工具调用生命周期
 
-A tool call is intent, not a result. Consume a stream to its protocol terminal event before
-dispatching its complete call set, then return results before the model may judge or retry them.
+一次工具调用是意图，不是结果。先消费流直到协议终止事件，再分派完整的调用集合，然后在模型可以评判或重试之前返回结果。
 
-- Text that resembles tool markup never has execution authority. When a response has no native
-  calls but ends with a complete `<invoke>` for a known tool, the agent may discard it and retry
-  up to five times, each correction a committed turn message sent with the unchanged tool list.
-  Never parse its arguments or synthesize a call id or result.
-- Every emitted call receives a matching result, including malformed, refused, failed, skipped,
-  and interrupted calls. This keeps replay valid across protocols.
-- Independent read-only calls may run concurrently. Mutating or interactive calls remain ordered;
-  all outcomes are displayed, stored, and returned in the model's original order.
-- A tool may produce a model observation in addition to its matched textual result. Observations
-  follow every result in the proposed batch, use the durable protocol-neutral message model, and
-  are projected into each provider's native multimodal shape only at the request boundary.
-- Interrupting before assistant activity retracts the turn. Once text or a tool call is visible,
-  preserve the partial turn and add cancellation results for unanswered calls.
+- 像工具标记的文本永远没有执行权。当响应没有原生调用、却以对已知工具的完整 `<invoke>` 结尾时，agent 可以丢弃它并重试最多五次，每次修正都是作为一条已提交的回合消息、用不变的工具列表发送。绝不解析其参数，也绝不合成调用 id 或结果。
+- 每个发出的调用都收到匹配的结果，包括畸形、被拒绝、失败、跳过和中断的调用。这保证了跨协议的重放有效。
+- 独立的只读调用可以并发运行。变更或交互式调用保持有序；所有结果都按模型给出的原始顺序展示、存储并返回。
+- 工具除了匹配的文本结果，还可以产生一条模型观察。观察跟在所提议批次中每个结果之后，使用持久的协议中立消息模型，只在请求边界投影为各 provider 的原生多模态形态。
+- 在助手活动之前中断会撤回回合。一旦有文本或工具调用可见，就保留部分回合，并为未回答的调用添加取消结果。
 
-## Retention and recall
+## 保留与召回
 
-Bounded active context and recoverable detail are separate concerns:
+有界的活动上下文与可恢复的细节是两个分开的关注点：
 
-- A large tool result enters the conversation as a bounded view while its retained full output is
-  addressed by `tr.N`. `Recall` can retrieve selected line ranges; a hard session ceiling prevents
-  indefinite growth, and compaction prunes records no surviving message or summary references.
-- Compaction stores one bounded verbatim excerpt of each evicted span as `seg.N`. `RecallContext`
-  gets a segment or regex-searches all retained segments; it does not pretend the excerpt is a
-  lossless copy of arbitrarily large conversation history.
-- Segment titles are not standing context. `RecallContext(list)` pages through them newest first,
-  while search covers the warm segment store and `get` retrieves selected excerpts.
-- `AgentState` is the durable semantic view of goal, plan, known facts, and checks. `Note(update)`
-  changes it transactionally and its matched call/result makes the change visible in append-only
-  model history; `Note(view)` reads selected fields without mutation. Compaction materializes the
-  complete current state into one checkpoint before older Note history can leave active context.
-- Recall tools do not create new retained-result keys. Their output is ordinary, bounded turn
-  context and should be requested selectively instead of recursively copying cold detail into hot
-  context.
-- Snapshot JSONL is the persistence and resume boundary, not a model-facing search engine. Runtime
-  recall uses the current retained indexes and never scans historical log records opportunistically.
+- 大工具结果以有界视图进入对话，其保留的完整输出由 `tr.N` 寻址。`Recall` 可以取回选定的行范围；硬性的会话上限防止无限增长，压缩修剪掉没有存活消息或摘要引用的记录。
+- 压缩把每个被驱逐片段的一段有界逐字摘录取为 `seg.N`。`RecallContext` 获取单个片段，或对全部保留片段做正则搜索；它不会假装摘录是任意大对话历史的无损副本。
+- 片段标题不是常驻上下文。`RecallContext(list)` 按最新优先翻页浏览它们，搜索覆盖热片段存储，`get` 取回选定的摘录。
+- `AgentState` 是目标、计划、已知事实和检查的持久语义视图。`Note(update)` 事务性地改变它，其匹配的调用/结果让变更在只追加的模型历史中可见；`Note(view)` 只读选定字段，不发生变更。压缩在更早的 Note 历史离开活动上下文之前，把完整当前状态物化进一个检查点。
+- 召回工具不创建新的保留结果键。它们的输出是普通的、有界的回合上下文，应当选择性请求，而不是把冷细节递归复制进热上下文。
+- 快照 JSONL 是持久化与恢复边界，不是面向模型的搜索引擎。运行时召回使用当前的保留索引，绝不机会性地扫描历史日志记录。
 
-## Persistence and input transactions
+## 持久化与输入事务
 
-Snapshots are project-scoped JSONL: one full snapshot followed by deltas, with large repeated text
-stored once as content-addressed blobs. Persist semantic checkpoints, not object graphs.
+快照是项目作用域的 JSONL：一个完整快照后跟增量，大的重复文本以内容寻址 blob 的形式只存一次。持久化语义检查点，而不是对象图。
 
-- Checkpoint active turns at stable request and tool boundaries; never serialize a partial protocol
-  object merely because it is visible in a live preview.
-- Claim queued follow-ups for the next request, acknowledge them only after that request succeeds,
-  and release them on failure or interruption. Retries therefore see exactly the same input.
-- Keep image assets while any persisted, queued, or retained reference needs them; garbage collect
-  only after the surviving snapshot no longer does.
-- Reconstruct transcript and UI state from semantic records on resume. Never persist live preview
-  rows as conversation messages.
-- Store the session start once as a local ISO timestamp with a numeric timezone offset. Resume
-  appends another timestamped lifecycle event with canonical role `user`: it describes new user
-  context, remains a tail addition, and works identically through Chat and Responses. It is hidden
-  from transcript rendering, not filtered from persistence or model history.
-- `context_layout_version` versions model-visible layout independently of the JSONL format. Loading
-  an older layout converts a numeric legacy `created_at` to local time when necessary, emits at
-  most one complete state checkpoint, advances the layout version, then appends the resume event.
-  The next snapshot persists these as an append-only delta.
+- 在稳定的请求与工具边界检查点活动回合；绝不因为某个部分协议对象出现在实时预览中就序列化它。
+- 认领排队的后续输入用于下一次请求，只在该请求成功之后确认它们，失败或中断时释放。因此重试看到的输入完全一致。
+- 只要任何持久化、排队或保留的引用还需要图片资产，就保留它们；只有存活的快照不再需要时才做垃圾回收。
+- 恢复时从语义记录重建转录与 UI 状态。绝不把实时预览行持久化为对话消息。
+- 会话开始时间只存一次，为带数值时区偏移的本地 ISO 时间戳。恢复追加另一条带时间戳的生命周期事件，规范角色为 `user`：它描述新的用户上下文，是尾部追加，在 Chat 和 Responses 下行为完全一致。它在转录渲染中隐藏，而不是从持久化或模型历史中过滤。
+- `context_layout_version` 独立于 JSONL 格式对模型可见布局做版本化。加载更旧的布局时，必要时把数值型旧版 `created_at` 转换为本地时间，至多发出一个完整状态检查点，推进布局版本，然后追加恢复事件。下一个快照把这一切持久化为只追加增量。
 
-## Terminal boundary
+## 终端边界
 
-The terminal has two deliberately different output paths:
+终端有两条刻意不同的输出路径：
 
-- Completed user, assistant, and tool output is printed into native terminal or tmux scrollback.
-- Drafts, live model/tool previews, queue state, selectors, and status are one prompt-toolkit
-  application on the primary screen. Exclusive viewers such as `/diff` may temporarily use the
-  alternate screen and restore the transcript on exit.
+- 已完成的用户、助手和工具输出打印进原生终端或 tmux 回滚缓冲区。
+- 草稿、实时的模型/工具预览、队列状态、选择器和状态是主屏幕上的一个 prompt-toolkit 应用。`/diff` 等独占查看器可以临时使用备用屏幕，退出时恢复转录。
 
-Preserving native scrollback is more important than making every transient frame durable. Terminal
-resize and reflow can leave copies of a live preview in scrollback; those copies are visual artifacts,
-not session history. Do not clear scrollback, persist preview rows, or move the whole application to
-the alternate screen to hide that artifact—the cure would discard more valuable behavior.
+保留原生回滚缓冲区比让每个瞬态帧都持久更重要。终端缩放与回流可能让实时预览的副本留在回滚缓冲区中；这些副本是视觉伪影，不是会话历史。不要清空回滚缓冲区、持久化预览行，或把整个应用移到备用屏幕来隐藏该伪影——这种补救会丢掉更有价值的行为。
 
-## Compaction
+## 压缩
 
-Compaction is the deliberate persisted exception to send-time-only projection: it replaces old
-active messages with a summary when the effective request, including tools, reaches the input
-budget.
+压缩是发送时投影之外的一个刻意且持久的例外：当有效请求（含工具）达到输入预算时，它用摘要替换旧的活动消息。
 
-- Compact prior history first and the active turn only if the rebuilt request remains too large.
-- Keep the latest user boundary and a recent tail. Never split assistant tool calls from their
-  following results.
-- Feed the previous summary and structured goal, plan, known facts, and checks to the compactor
-  explicitly. Do not treat an old summary as ordinary conversation to summarize again; each newly
-  evicted message span is captured once before it leaves the active history.
-- Store a bounded verbatim excerpt as a `seg.N` history segment for `RecallContext`. Replace the
-  evicted prefix with one append-only checkpoint containing the summary, complete working state,
-  and new segment pointer; use surviving messages and checkpoints as the reachability set when
-  compaction prunes `tr.N` records.
-- If model-generated compaction fails, fall back to deterministic trimming with an explicit marker.
-  Compaction must remain a recovery path, and its output never enters the live answer preview.
-- Compaction cannot make an oversized fixed prefix, latest user boundary, tool schema set, or single
-  retained object fit. Bound such sources at their owner or fail clearly; never claim that deleting
-  protocol structure made a request valid.
+- 先压缩先前历史，只有重建后的请求仍然过大时才压缩活动回合。
+- 保留最新的用户边界和一段近期尾部。绝不把助手工具调用与其后的结果拆开。
+- 把上一个摘要和结构化的目标、计划、已知事实与检查显式喂给压缩器。不要把旧摘要当作普通对话再摘要一次；每个新被驱逐的消息片段在离开活动历史之前只捕获一次。
+- 把有界逐字摘录取为 `seg.N` 历史片段供 `RecallContext` 使用。用一个只追加的、包含摘要、完整工作状态和新片段指针的检查点替换被驱逐的前缀；压缩修剪 `tr.N` 记录时，用存活的 messages 与检查点作为可达集。
+- 如果模型生成的压缩失败，回退到带显式标记的确定性裁剪。压缩必须始终是恢复路径，其输出绝不进入实时回答预览。
+- 压缩无法让过大的固定前缀、最新用户边界、工具 schema 集合或单个保留对象变小。在拥有者处约束这类来源，或明确失败；绝不要声称删除协议结构就让请求变合法。
 
-## Cache test boundary
+## 缓存测试边界
 
-Cache behavior is tested through the real Agent and provider SDK request serialization against a
-test-only OpenAI HTTP behavior model. The mock implements both Chat Completions and Responses,
-implicit user/tool breakpoints, longest exact-prefix reads, stable-key scopes, and read/write usage.
-Black-box cases cover ordinary multi-turn growth, Note/tool-result boundaries, resume, one
-compaction epoch, and model-scope changes.
+缓存行为通过真实 Agent 和 provider SDK 请求序列化，对着一个仅测试用的 OpenAI HTTP 行为模型来测试。该 mock 同时实现 Chat Completions 和 Responses、隐式用户/工具断点、最长精确前缀读取、稳定键作用域以及读写用量。黑盒用例覆盖普通多回合增长、Note/工具结果边界、恢复、一个压缩代际和模型作用域变更。
 
-The mock is a deterministic contract test, not evidence that a live provider retained a prefix for
-any particular duration or token threshold. Provider integration tests, when credentials are
-available, should verify reported usage and request acceptance without replacing the deterministic
-suite.
+该 mock 是确定性契约测试，不是"线上 provider 把前缀保留了特定时长或 token 阈值"的证据。有凭据时，provider 集成测试应验证报告的用量与请求被接受，而不替代确定性套件。
 
-## Failure boundaries
+## 失败边界
 
-- Retry only bounded, plausibly transient model failures. User cancellation, explicit capability
-  rejection, validation errors, and total-generation deadlines are not automatic retry signals.
-- Cancellation is a control signal, not a state mutation from another thread. Fan it out to the
-  active model and tool resources, then let the owning turn settle or retract its semantic records.
-- Tool failures become matched tool results rather than broken turns. Cancellation settles every
-  already-visible call so later protocol replay remains valid.
-- Lower layers contain recoverable detail: retained output supports recall, snapshots support
-  resume, and deterministic compaction preserves progress when the summarizer is unavailable.
+- 只重试有界的、看起来瞬时性的模型失败。用户取消、显式能力拒绝、校验错误和生成总时限不是自动重试信号。
+- 取消是控制信号，不是来自其他线程的状态变更。把它扇出到活动的模型和工具资源，然后让所属回合落定或撤回其语义记录。
+- 工具失败变成匹配的工具结果，而不是残缺的回合。取消落定每个已可见的调用，使之后的协议重放仍然有效。
+- 下层包含可恢复的细节：保留输出支撑召回，快照支撑恢复，确定性压缩在摘要器不可用时保存进度。

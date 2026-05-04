@@ -1,18 +1,17 @@
-# Configuration
+# 配置
 
-yucode reads a single TOML file, `~/.yucode/config.toml` by default. Generate a
-commented starter with `yucode --init-config`, or point at another file with
-`--config <path>`.
+yucode 默认读取单个 TOML 文件 `~/.yucode/config.toml`。可用 `yucode --init-config`
+生成带注释的初始配置,或用 `--config <path>` 指向其他文件。
 
-<span class="marker">Only the `[provider]` block is required.</span> Every other key falls back to
-a built-in default, so a minimal config is just a provider. Inspect the resolved configuration
-at any time with `/config`.
+<span class="marker">只有 `[provider]` 块是必需的。</span> 其他所有键都回退到
+内置默认值,因此最小配置只需一个 provider。随时可用 `/config` 检查解析后的配置。
 
-## Providers
+(providers)=
+## Provider
 
-yucode supports OpenAI-compatible Chat Completions and Responses APIs, plus the Anthropic
-Messages API. Define one or more `[provider.<name>]` blocks and select one with
-`[provider] active`:
+yucode 支持 OpenAI 兼容的 Chat Completions 与 Responses API,以及 Anthropic
+Messages API。定义一个或多个 `[provider.<name>]` 块,并用 `[provider] active`
+选择其中一个:
 
 ```toml
 [provider]
@@ -24,67 +23,66 @@ key = "sk-..."
 model = "deepseek-v4-flash"
 ```
 
-These three fields are enough for most endpoints. yucode selects the usual protocol and applies
-only necessary, documented compatibility adjustments. Explicit settings always take precedence.
-Use `/config` to inspect the result.
+对大多数端点来说,这三个字段就足够了。yucode 会选用常规协议,只应用必要且有
+文档说明的兼容性调整。显式设置始终优先。用 `/config` 检查结果。
 
-Define additional blocks to use more providers. Switch between them with `/provider [NAME]`, and
-switch the active model with `/model [MODEL]`.
+定义更多块即可使用更多 provider。用 `/provider [NAME]` 在它们之间切换,用
+`/model [MODEL]` 切换当前模型。
 
-### API protocol
+### API 协议
 
-Leave `api = "auto"` unless your endpoint needs an explicit protocol:
+除非你的端点需要显式协议,否则保持 `api = "auto"`:
 
-| Value | Meaning |
+| 值 | 含义 |
 |---|---|
-| `auto` | Infer the protocol when possible; otherwise use Chat Completions |
-| `chat` | OpenAI-compatible Chat Completions |
-| `responses` | OpenAI-compatible Responses |
-| `anthropic` | Anthropic-compatible Messages |
+| `auto` | 尽可能推断协议;否则使用 Chat Completions |
+| `chat` | OpenAI 兼容的 Chat Completions |
+| `responses` | OpenAI 兼容的 Responses |
+| `anthropic` | Anthropic 兼容的 Messages |
 
-A URL ending in `/chat/completions`, `/responses`, or `/messages` also selects that protocol.
+以 `/chat/completions`、`/responses` 或 `/messages` 结尾的 URL 也会选择相应
+协议。
 
-### Optional provider settings
+(optional-provider-settings)=
+### 可选的 provider 设置
 
-Most users can leave these unset.
+大多数用户无需设置这些项。
 
-| Key | Default | Meaning |
+| 键 | 默认值 | 含义 |
 |---|---|---|
-| `api` | `auto` | API protocol shown above |
-| `stream` | `true` | Stream model output; disable for endpoints that reject streaming or Chat `stream_options` |
-| `image_input` | `auto` | Image capability: learn automatically, force `on`, or disable with `off` |
-| `reasoning` | `medium` | Reasoning effort: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`; change it during a session with `/reason` |
-| `available_models` | — | Additional models shown by `/model` |
-| `temperature` | — | Sampling temperature; omitted by default |
-| `max_tokens` | `0` | Output-token cap per model request, reasoning included; `0` leaves it to the provider (Anthropic sends a conservative 8K). 16K is still reserved from the input budget for the answer, trading against `max_context_tokens` one for one |
-| `timeout` | `120` | Transport inactivity timeout in seconds |
-| `response_timeout` | `600` | Total generation limit in seconds; `0` disables it |
-| `prompt_cache_key` | `auto` | Stable prompt-cache key; set `off` to omit it |
-| `strict_tools` | `false` | Request strict function schemas where supported; toggle with `/strict` |
-| `extra_body` | `{}` | Extra fields for an OpenAI-compatible request body |
-| `builtin_tools` | `[]` | Tools the provider runs itself, passed through verbatim; see below |
-| `chat_reasoning` | `auto` | Provider-specific Chat reasoning format; normally leave on `auto` |
+| `api` | `auto` | 上文所示的 API 协议 |
+| `stream` | `true` | 流式输出模型内容;拒绝流式或 Chat `stream_options` 的端点请关闭 |
+| `image_input` | `auto` | 图片能力:自动学习、强制设为 `on`,或用 `off` 禁用 |
+| `reasoning` | `medium` | 推理级别:`off`、`minimal`、`low`、`medium`、`high`、`xhigh` 或 `max`;会话中可用 `/reason` 修改 |
+| `available_models` | — | `/model` 显示的额外模型 |
+| `temperature` | — | 采样温度;默认省略 |
+| `max_tokens` | `0` | 每次模型请求的输出 token 上限(含推理);`0` 表示交由 provider 决定(Anthropic 会发送保守的 8K)。16K 仍从输入预算中为回答预留,与 `max_context_tokens` 一对一扣减 |
+| `timeout` | `120` | 传输不活动超时(秒) |
+| `response_timeout` | `600` | 总生成时长上限(秒);`0` 表示禁用 |
+| `prompt_cache_key` | `auto` | 稳定的 prompt-cache 键;设为 `off` 可省略 |
+| `strict_tools` | `false` | 在支持处请求严格函数 schema;可用 `/strict` 切换 |
+| `extra_body` | `{}` | OpenAI 兼容请求体的额外字段 |
+| `builtin_tools` | `[]` | provider 自行运行的工具,原样透传;见下文 |
+| `chat_reasoning` | `auto` | 特定 provider 的 Chat 推理格式;通常保持 `auto` |
 
-Streaming is enabled by default for all three protocols. If a compatible endpoint does not
-support it, set `stream = false` in that provider block, or use `/set provider.stream off` for
-the current session.
+三种协议默认都启用流式。若兼容端点不支持,可在该 provider 块中设置
+`stream = false`,或对当前会话使用 `/set provider.stream off`。
 
-`timeout` detects a connection that stops delivering data. Streaming reasoning can keep that
-timer active indefinitely, so `response_timeout` separately limits the complete model response to
-ten minutes by default. Reaching the total limit cancels the request without automatic retries;
-set it to `0` only when deliberately allowing unbounded generations.
+`timeout` 用于发现停止传输数据的连接。流式推理可能让该计时器无限期保持活动,
+因此 `response_timeout` 单独将完整模型响应默认限制为十分钟。达到总时限会取消
+请求且不自动重试;只有刻意允许无限生成时才设为 `0`。
 
-For provider/model combinations with documented reasoning constraints, yucode maps the selected
-effort to the nearest accepted value. Unknown OpenAI-compatible endpoints and model names stay on
-the generic path rather than an allowlist; set `api` and `chat_reasoning` explicitly if automatic
-selection is wrong. `/config` shows the resolved reasoning effort, while `/status` shows the active
-model and cache usage reported by the provider.
+对于有文档记载的推理约束的 provider/模型组合,yucode 会把所选级别映射到最接近
+的接受值。未知的 OpenAI 兼容端点与模型名走通用路径而非白名单;若自动选择有误,
+可显式设置 `api` 与 `chat_reasoning`。`/config` 显示解析后的推理级别,`/status`
+显示当前模型与 provider 报告的缓存使用情况。
 
-## Provider-side tools
+<a id="provider-side-tools"></a>
+## Provider 侧工具
 
-Some providers can run web search themselves; see
-[Provider-side tools](tools.md#provider-side-tools) for what that looks like in a session. List
-the ones you want in `builtin_tools`, written the way your provider documents them:
+有些 provider 可以自行执行网络搜索;参见
+[Provider 侧工具](tools.md#provider-side-tools)了解它在会话中的表现。把想要的
+工具按 provider 文档的写法列在 `builtin_tools` 中:
 
 ```toml
 [provider]
@@ -94,62 +92,61 @@ api = "responses"
 builtin_tools = [{ type = "web_search" }, { type = "web_extractor" }]
 ```
 
-| Provider | Entry |
+| Provider | 条目 |
 |---|---|
-| OpenAI (Responses) | `{ type = "web_search" }`, optionally with `search_context_size` or `filters` |
-| Qwen (Responses) | `{ type = "web_search" }`; also `web_extractor` |
+| OpenAI (Responses) | `{ type = "web_search" }`,可选带 `search_context_size` 或 `filters` |
+| Qwen (Responses) | `{ type = "web_search" }`;也可带 `web_extractor` |
 | Anthropic | `{ type = "web_search_20250305", name = "web_search", max_uses = 5 }` |
 | Z.AI / BigModel | `{ type = "web_search", web_search = { enable = "True" } }` |
 | Kimi / Moonshot | `{ type = "builtin_function", function = { name = "$web_search" } }` |
-| OpenRouter | `{ type = "openrouter:web_search" }`; also `openrouter:web_fetch`, `openrouter:datetime` |
+| OpenRouter | `{ type = "openrouter:web_search" }`;也可带 `openrouter:web_fetch`、`openrouter:datetime` |
 
-One provider configures search elsewhere, through [`extra_body`](#optional-provider-settings):
-Qwen's Chat Completions endpoint takes `enable_search`. DeepSeek has no web search.
+有一个 provider 是通过 [`extra_body`](#optional-provider-settings) 在其他地方
+配置搜索的:Qwen 的 Chat Completions 端点接受 `enable_search`。DeepSeek 没有
+网络搜索。
 
-Builtin tools only work with the APIs shown in the table. If you switch to another API, yucode
-keeps the setting but does not send those tools; switching back enables them again. Use `/config`
-to check whether they are active. If yucode reports an unsupported entry, compare it with the
-example for your provider.
+内置工具只适用于表中所示的 API。若切换到其他 API,yucode 会保留设置但不发送
+这些工具;切回来时它们会再次生效。用 `/config` 检查它们是否处于活动状态。若
+yucode 报告不支持的条目,请与你的 provider 的示例对比。
 
-With `image_input = "auto"`, yucode sends attached images using the selected standard API. A
-successful image request is remembered for that provider and model during the session; only an
-explicit image-not-supported response disables later image submissions. Set `on` or `off` when the
-endpoint's capability is already known. Historical images remain readable as text labels after
-switching to a provider or model with image input disabled.
+使用 `image_input = "auto"` 时,yucode 通过所选的标准 API 发送附件图片。会话
+期间,成功的图片请求会为对应的 provider 与模型记下;只有显式的"不支持图片"
+响应才会禁用后续的图片提交。若端点的能力已知,可直接设为 `on` 或 `off`。
+切换到禁用图片输入的 provider 或模型后,历史图片仍可作为文本标签读取。
 
-## Runtime
+## 运行时
 
-Optional; the defaults shown are used when omitted.
+可选;省略时使用表中所示的默认值。
 
-| Key | Default | Meaning |
+| 键 | 默认值 | 含义 |
 |---|---|---|
-| `yolo` | `false` | Start without confirmation prompts |
-| `quick_hints` | `true` | Let the model offer selectable next-step chips; toggle with `/hints` |
-| `max_context_tokens` | `262144` (256K) | How much of the model's context window to use, which sets the automatic-compaction budget. It is a budget, not the window's size: raise it for a 1M-window model, lower it for a smaller one |
-| `max_agent_steps` | `200` | Maximum tool steps in one turn |
-| `shell_timeout` | `60` | Maximum shell-command lifetime, in seconds |
-| `bash_wait_timeout` | `10` | Foreground wait before a running command becomes a background job; `0` disables promotion |
-| `max_parallel_tools` | `4` | Maximum read-only tool calls executed concurrently; `1` disables parallelism |
-| `session_retention_days` | `7` | Delete saved sessions untouched for this many days, swept in the background at startup; `0` keeps them indefinitely |
-| `theme` | `auto` | Terminal theme: `auto`, `light`, or `dark`; overridden by `--theme` |
+| `yolo` | `false` | 启动时不启用确认提示 |
+| `quick_hints` | `true` | 让模型提供可选择的下一步提示芯片;可用 `/hints` 切换 |
+| `max_context_tokens` | `262144` (256K) | 使用模型上下文窗口的多少,这决定了自动上下文压缩预算。它是预算而非窗口大小:1M 窗口的模型可调高,较小的模型调低 |
+| `max_agent_steps` | `200` | 单个回合内工具步骤的上限 |
+| `shell_timeout` | `60` | shell 命令的最大存活时长(秒) |
+| `bash_wait_timeout` | `10` | 运行中的命令转为后台任务前的等待时长;`0` 禁用提升 |
+| `max_parallel_tools` | `4` | 并发执行的只读工具调用上限;`1` 禁用并行 |
+| `session_retention_days` | `7` | 删除这么多天未使用的已保存会话,启动时在后台清扫;`0` 表示永久保留 |
+| `theme` | `auto` | 终端主题:`auto`、`light` 或 `dark`;可被 `--theme` 覆盖 |
 
-Selected tuning values can be changed for the current session with `/set` (Tab completion
-lists the supported keys). `/yolo` toggles `yolo`.
+部分调优值可用 `/set` 为当前会话修改(Tab 补全会列出支持的键)。`/yolo` 切换
+`yolo`。
 
-## Data location
+## 数据位置
 
 ```toml
 [paths]
 data_dir = "~/.yucode"   # sessions, input history, OAuth tokens, user skills, update cache
 ```
 
-Sessions live under `<data_dir>/projects/<project>/`, one directory per working directory. Each
-holds that project's session logs and a `latest` pointer, so a resume stays scoped to the project
-it belongs to. A project directory is removed once its last session expires.
+会话存放在 `<data_dir>/projects/<project>/` 下,每个工作目录一个目录。每个目录
+存放该项目的会话日志与一个 `latest` 指针,因此恢复时会话始终限定在其所属的
+项目内。最后一个会话过期后,项目目录会被删除。
 
-Beside each log sits a small `<uid>.meta.json` holding what the session picker shows — name,
-opening line, round count. The log stays the source of truth; deleting a sidecar only costs that
-session its label in the list.
+每个日志旁都有一个小的 `<uid>.meta.json`,保存会话选择器显示的内容——名称、
+开场白、回合数。日志始终是权威来源;删除这个旁路文件只会让该会话在列表中
+失去标签。
 
-`<data_dir>/history.txt` holds the input history that Up and Ctrl-P recall, across every project.
-It is capped at 512 KB, keeping the most recent entries.
+`<data_dir>/history.txt` 保存跨所有项目的输入历史,可用 Up 与 Ctrl-P 回溯。
+其上限为 512 KB,只保留最近的条目。

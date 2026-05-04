@@ -464,19 +464,6 @@ class Config:
     data_dir: str = "~/.yucode"
     mcp: Json = field(default_factory=dict)
 
-    # 向后兼容:数据目录曾先后位于 ~/.nanocode、~/.minacode,最终迁移到 ~/.yucode。
-    LEGACY_DATA_DIR: ClassVar[str] = "~/.minacode"
-
-    def __post_init__(self) -> None:
-        # 数据目录仍是新默认值但尚未创建、而旧版 ~/.minacode 目录存在时,继续用旧目录,
-        # 已有的 sessions、skills 与缓存无需迁移步骤即可被找到。
-        if (
-            self.data_dir == "~/.yucode"  # 用户显式配置了其他目录则绝不干预
-            and not os.path.exists(os.path.expanduser(self.data_dir))
-            and os.path.exists(os.path.expanduser(self.LEGACY_DATA_DIR))
-        ):
-            self.data_dir = self.LEGACY_DATA_DIR  # 只切换路径,不复制任何数据
-
     @property
     def provider(self) -> ProviderConfig:
         return self.providers[self.active_provider]  # from_dict 已保证 active 存在,这里必然命中
@@ -573,7 +560,6 @@ class Config:
 
 class ConfigFile:
     DEFAULT_PATH: ClassVar[str] = os.path.join(os.path.expanduser("~"), ".yucode", "config.toml")
-    LEGACY_PATH: ClassVar[str] = os.path.join(os.path.expanduser("~"), ".minacode", "config.toml")
     # 只有 provider 块是必需的;其余键都回退到内置默认值,因此下面被注释掉的行
     # 只是文档性质,用于说明常用旋钮及其默认值。
     DEFAULT_TEXT: ClassVar[str] = """# yucode configuration — unset keys use built-in defaults.
@@ -618,10 +604,6 @@ model = ""
     def resolve_path(cls, path: str | None) -> str:
         if path:
             return os.path.expanduser(path)  # 显式传入的路径优先
-        # 向后兼容:新的 ~/.yucode/config.toml 尚不存在而旧版 ~/.minacode/config.toml 存在时,
-        # 读旧文件,老用户升级后无需手动迁移配置。
-        if not os.path.exists(cls.DEFAULT_PATH) and os.path.exists(cls.LEGACY_PATH):
-            return cls.LEGACY_PATH
         return cls.DEFAULT_PATH
 
     @classmethod

@@ -1,153 +1,63 @@
-# Changelog
+# 更新日志
 
 
-## Unreleased
+## 未发布
 
-### Changed
-- Renamed the project from `minacode` to `yucode`: the package and import (`import yucode`), the
-  `yucode` console script and `python -m yucode`, and the PyPI distribution (`yucode`, formerly
-  `minacode`, originally `nanocode-cli`). The data dir moved from `~/.minacode` to `~/.yucode`;
-  when the new directory is absent the old one is still read, so existing sessions, skills, and
-  config keep working without a migration step.
-- Reword the Edit `start`/`end` anchor parameter descriptions: the anchor must be the exact current
-  `line:hash` value copied verbatim from Read, Search, or InspectCode, never invented or calculated,
-  and re-read after any file change or stale-anchor error. The old wording only named the format and
-  the inclusive range, giving the model no instruction against deriving anchors itself.
+### 变更
+- 项目从 `minacode` 更名为 `yucode`：包括包与导入（`import yucode`）、`yucode` 控制台命令与 `python -m yucode`、以及 PyPI 发行包（`yucode`，原名 `minacode`，最初为 `nanocode-cli`）。数据目录从 `~/.minacode` 迁移到 `~/.yucode`；新目录不存在时仍会读取旧目录，因此现有会话、技能和配置无需迁移步骤即可继续使用。
+- 改写 Edit 的 `start`/`end` 锚点参数描述：锚点必须是原样复制自 Read、Search 或 InspectCode 的精确当前 `line:hash` 值，绝不能自行编造或推算，且在文件任何改动或锚点过期报错后需要重新读取。旧描述只说明了格式和包含区间，没有告诉模型不要自行推导锚点。
 
-### Fixed
-- Estimate request tokens from UTF-8 bytes instead of characters (4 bytes/token), so CJK-heavy
-  sessions are no longer undercounted about 3x: the status bar could show 100% while the next request
-  was still estimated under budget and auto-compaction never fired. ASCII payloads estimate exactly
-  as before. The tool-output trimmer keeps its chars/4 measure, and a last line of defense forces
-  compaction when the previous request filled >=99% of its budget even if the estimate still fits.
-  Compaction clears the recorded last-* usage (the compaction request's own fill would otherwise be
-  mistaken for a full ordinary context and double-compact the just-shrunk history); the status bar
-  falls back to the local estimate until the next ordinary request reports real usage.
+### 修复
+- 请求 token 改用 UTF-8 字节数估算（4 字节/token）而非字符数，CJK 密集的会话不再被约 3 倍低估：状态栏可能显示 100%，而下一次请求仍被估算在预算之内，自动压缩从未触发。ASCII 载荷的估算与之前完全一致。工具输出裁剪仍采用字符数/4 的度量，并新增最后一道防线：即使估算仍在预算内，只要上一个请求用满 >=99% 的预算就强制压缩。压缩会清除记录的 last-* 用量（否则压缩请求自身的占用量会被误认为一个占满的普通上下文，导致刚压缩过的历史被二次压缩）；在下一个普通请求上报真实用量之前，状态栏回退到本地估算。
 
 
 ## 0.20.0 - 2026-08-03
 
-### Fixed
-- Show the thinking preview on Responses hosts that stream the raw reasoning chain rather than a
-  summary. Only `response.reasoning_summary_text.delta` was recognized, so a provider that emits
-  `response.reasoning_text.delta` — DeepSeek documents that it generates no summary at all — ran a
-  high-effort step with nothing on screen until the answer arrived. Stored history was already
-  complete; only the live preview was missing.
-- Report a generation the provider cut off at the output cap instead of failing the turn with
-  `empty final response`. Reasoning counts against `provider.max_tokens` on the Responses and
-  Anthropic wires, so a high-effort step could spend the whole budget and return neither text nor a
-  tool call; the error now names the cap, the tokens spent, and how much of that was reasoning. A
-  truncation that still produced text keeps its partial answer. The failure is deterministic and no
-  longer consumes a retry.
-- Treat `finish_reason=length` on the Chat wire as output truncation only when the reported output
-  tokens actually reached the configured cap. OpenAI-compatible providers also return `length` when
-  the input exceeds the model's context window; the error now names both `provider.max_tokens` and
-  `runtime.max_context_tokens` instead of pushing the output cap blindly.
+### 修复
+- 在流式返回原始推理链而非摘要的 Responses 主机上显示思考预览。此前只识别 `response.reasoning_summary_text.delta`，因此发送 `response.reasoning_text.delta` 的提供商（DeepSeek 文档明确说明完全不生成摘要）会在屏幕上什么都没有的情况下运行一个高算力步骤，直到答案到达。存储的历史记录本来就是完整的，缺失的只是实时预览。
+- 将提供商在输出上限处截断的生成报告为截断，而不是以 `empty final response` 失败结束回合。在 Responses 和 Anthropic 链路上，推理计入 `provider.max_tokens`，因此高算力步骤可能用完全部预算，却既不返回文本也不返回工具调用；现在的错误会说明上限、已消耗的 token 以及其中多少是推理。产生了部分文本的截断仍保留其部分答案。该失败是确定性的，不再消耗一次重试。
+- 仅在报告的输出 token 确实达到配置上限时，才把 Chat 链路上的 `finish_reason=length` 视为输出截断。OpenAI 兼容提供商在输入超过模型上下文窗口时也会返回 `length`；现在的错误会同时指出 `provider.max_tokens` 和 `runtime.max_context_tokens`，而不是盲目上调输出上限。
 
-### Changed
-- Default `provider.max_tokens` back to `0`, so Chat and Responses omit the cap and let the provider
-  apply its own default instead of sending a hard-coded 16K that some models reject (Claude 3.5
-  Haiku on Bedrock, for one, caps at 8K). The Anthropic wire still requires the parameter and sends
-  a conservative 8K when unset. The 16K output reserve taken out of the input budget is unchanged.
-- Raise the default `runtime.max_context_tokens` from 240K to 256K. Both defaults appear in the
-  generated config with a note that they trade against each other and that the context budget is how
-  much of a model's window to use, not the window's size.
-- Show the context fill in the status bar and `/status` from the provider-reported prompt tokens of
-  the last request instead of the local estimate. The estimate still triggers compaction, which
-  decides for a request that has not been sent yet; the reported usage describes the one that was.
-- Show that fill against the budget the last request was prepared against
-  (`session.usage.last_prompt_budget`) instead of recomputing the denominator from the current
-  configuration, so `/set provider.max_tokens`, `/set runtime.max_context_tokens`, or a provider
-  switch no longer moves the recorded percentage before the next request.
+### 变更
+- 将 `provider.max_tokens` 默认值恢复为 `0`，Chat 和 Responses 因此省略上限，交由提供商应用自己的默认值，而不是发送某些模型会拒绝的硬编码 16K（例如 Bedrock 上的 Claude 3.5 Haiku 上限为 8K）。Anthropic 链路仍要求该参数，未设置时发送保守的 8K。从输入预算中扣除的 16K 输出预留保持不变。
+- 将 `runtime.max_context_tokens` 默认值从 240K 提高到 256K。两个默认值都会出现在生成的配置中，并附带说明：它们互为权衡，且上下文预算指的是使用模型窗口的多少，而不是窗口的大小。
+- 状态栏和 `/status` 中的上下文占用改用提供商报告的、上一个请求的 prompt token，而非本地估算。估算仍用于触发压缩——它针对尚未发送的请求做决策；而报告出的用量描述的是已发送的那个请求。
+- 该占用按上一个请求准备时所依据的预算（`session.usage.last_prompt_budget`）显示，而不是用当前配置重新计算分母，因此 `/set provider.max_tokens`、`/set runtime.max_context_tokens` 或切换提供商不再会在下一个请求之前改变已记录的百分比。
 
 
 ## 0.19.1 - 2026-08-03
 
-### Fixed
-- Never empty the tool list to force a live-follow-up acknowledgement. The extra request that
-  carried `tools=[]` discarded the cached prefix and moved the request into another cache scope, and
-  the model read the missing schemas as a broken tool set: it reported Bash, Edit, Search, and MCP
-  as unavailable, pasted patches instead of editing files, and asked the user to restore them. The
-  follow-up marker now just asks for a text acknowledgement in the same message as the next tool
-  calls, and a tools-only response continues the turn as usual.
-- Commit a live follow-up with the marker it was sent with. History stored the bare text while the
-  request carried `[Live follow-up received while you were working]`, so the next request replayed
-  different bytes at that position and ended the shared cache prefix there. The restored transcript
-  hides the marker, so the scrollback still shows what the user typed.
-- Commit textual tool-call corrections to history instead of sending them request-locally. What
-  reached the provider is now what the next request replays, corrections stack rather than replace
-  each other, and an aborted turn keeps the ones it already sent.
+### 修复
+- 不再清空工具列表来强制要求实时后续回执。携带 `tools=[]` 的额外请求丢弃了缓存前缀，把请求移入另一个缓存作用域，模型把缺失的模式解读为工具集损坏：它报告 Bash、Edit、Search 和 MCP 不可用，粘贴补丁而不是编辑文件，并请用户恢复它们。后续标记现在只在下一次工具调用的同一条消息中请求文本确认，纯工具响应照常继续回合。
+- 用发送时携带的标记提交实时后续。历史记录存储的是裸文本，而请求携带的是 `[Live follow-up received while you were working]`，因此下一个请求在该位置回放的是不同的字节，共享缓存前缀在那里结束。恢复的会话记录会隐藏该标记，滚动回看仍显示用户输入的内容。
+- 将文本形式的工具调用纠正提交到历史记录，而不是仅在本请求内生效。现在发送给提供商的内容就是下一个请求回放的内容，纠正互相叠加而非互相替换，被中止的回合保留已发送的纠正。
 
-### Changed
-- Write output for the terminal instead of a markdown renderer: reference local files as bare
-  `path:line` rather than as markdown links, and drop banner headings, tables for short answers, and
-  paste-back of file contents or command output the user already saw.
+### 变更
+- 面向终端而非 markdown 渲染器编写输出：本地文件以裸 `path:line` 引用，而非 markdown 链接；去掉横幅标题、短答案的表格，以及用户已经看过的文件内容或命令输出的回贴。
 
 
 ## 0.19.0 - 2026-08-02
 
-### Added
-- Ship a builtin `yucode-help` skill with an offline manual, troubleshooting guidance, a
-  matching-version source inspection fallback, and an idle hint inviting yucode questions.
-  Builtin skills use the same discovery and loading path as ordinary skills; user and project
-  skills can override them by name.
-- Add `max` reasoning effort and map normalized effort levels to each documented provider/model
-  family, including OpenAI GPT-5 and o-series generations, Anthropic, DeepSeek, Qwen, Kimi, Z.AI,
-  OpenRouter, and OpenCode Zen. Unknown providers and future model names retain generic
-  pass-through behavior, and `/config` now shows the resolved effort sent to the active model.
-- Add a `provider.builtin_tools` option (a list of tables, default empty) appended verbatim to the
-  `tools` array of whichever protocol the provider speaks, so a provider's own server-side tools can
-  be offered to the model. This is how provider web search is enabled: `{ type = "web_search" }` for
-  OpenAI and Qwen on the Responses API, `{ type = "web_search_20250305", name = "web_search" }` for
-  Anthropic, `{ type = "web_search", web_search = { enable = "True" } }` for Z.AI, and
-  `{ type = "openrouter:web_search" }` for OpenRouter. Entries are passed through unchanged after a
-  check for a non-empty `type` and against the provider's documented wire. Enabling an active entry
-  changes the prompt cache key, and `/config` distinguishes configured entries from the active
-  projection. One provider configures search through the request body instead — Qwen Chat's
-  `enable_search` — and continues to use `provider.extra_body`.
-- Scope known `provider.builtin_tools` entries to their documented request wire. Responses-only
-  entries (OpenAI, Qwen) are omitted on Chat or Anthropic, Anthropic server tools only travel over
-  Messages, and Z.AI/Kimi Chat entries only over Chat. Incompatible entries remain configured and
-  become active again after switching back, so a shared provider configuration works across models
-  without destructive edits; `/api` and `/config` report when they are inactive. On an active wire,
-  known providers still reject unsupported entries (for example Qwen `code_interpreter` or
-  Anthropic `web_fetch_*`) before SDK I/O, so approval, file, container, and client-callback
-  lifecycles cannot leak through. OpenRouter server tools (`openrouter:web_search`,
-  `openrouter:web_fetch`, `openrouter:datetime`) are supported; DeepSeek, Kimi Code, and OpenCode
-  activate none. Unknown hosts and future tool shapes on unknown hosts keep generic pass-through.
-- Log each provider-side tool call the provider reports
-  line, and show it as a running status phase while it happens. The line is written from the parsed
-  response, so it appears with streaming on or off.
-- Answer a provider's own builtin function calls, so Kimi's `$web_search` (declared as
-  `{ type = "builtin_function", function = { name = "$web_search" } }`) completes instead of
-  failing as an unknown tool. The declared call is answered with its arguments verbatim, as that
-  provider's protocol requires, without confirmation or result storage.
-- Resume an Anthropic turn the provider paused mid-search (`stop_reason: "pause_turn"`) by sending
-  the message back unchanged, instead of ending the turn on what looks like a complete answer.
-  Each resumption counts as one agent step, so it stays bounded by `max_agent_steps`.
-- List the sources a provider-side search reported under the answer. Sources are display only: the
-  stored answer stays exactly what the model wrote, and nothing extra replays to the provider.
+### 新增
+- 内置 `yucode-help` 技能，附带离线手册、故障排查指南、版本匹配的源码检视回退，以及邀请 yucode 相关问题的空闲提示。内置技能与普通技能使用相同的发现和加载路径；用户和项目技能可以按名称覆盖它们。
+- 新增 `max` 推理强度，并将归一化后的强度级别映射到每个文档化的提供商/模型家族，包括 OpenAI GPT-5 和 o 系列、Anthropic、DeepSeek、Qwen、Kimi、Z.AI、OpenRouter 和 OpenCode Zen。未知提供商和未来的模型名保留通用的直通行为，`/config` 现在显示发送给活动模型的最终强度。
+- 新增 `provider.builtin_tools` 选项（表列表，默认为空），原样附加到提供商所用协议的 `tools` 数组中，从而可以把提供商自己的服务端工具提供给模型。这就是启用提供商网络搜索的方式：Responses API 上 OpenAI 和 Qwen 用 `{ type = "web_search" }`，Anthropic 用 `{ type = "web_search_20250305", name = "web_search" }`，Z.AI 用 `{ type = "web_search", web_search = { enable = "True" } }`，OpenRouter 用 `{ type = "openrouter:web_search" }`。条目在通过 `type` 非空检查并对照提供商文档化链路之后原样透传。启用活动条目会改变提示缓存键，`/config` 区分已配置条目与活动投影。有一个提供商改在请求体中配置搜索——Qwen Chat 的 `enable_search`——并继续使用 `provider.extra_body`。
+- 将已知的 `provider.builtin_tools` 条目限定到其文档化的请求链路。仅 Responses 的条目（OpenAI、Qwen）在 Chat 或 Anthropic 上被省略，Anthropic 服务端工具只走 Messages，Z.AI/Kimi 的 Chat 条目只在 Chat 上生效。不兼容的条目保持已配置状态，切换回去后再次变为活动，因此共享的提供商配置可以跨模型使用而无需破坏性编辑；`/api` 和 `/config` 会在其不活动时报告。在活动链路上，已知提供商仍会在 SDK I/O 之前拒绝不支持的条目（例如 Qwen 的 `code_interpreter` 或 Anthropic 的 `web_fetch_*`），因此审批、文件、容器和客户端回调的生命周期不会泄漏。支持 OpenRouter 服务端工具（`openrouter:web_search`、`openrouter:web_fetch`、`openrouter:datetime`）；DeepSeek、Kimi Code 和 OpenCode 不激活任何条目。未知主机及其上未来的工具形态保持通用直通。
+- 将提供商报告的每次提供商侧工具调用记录为一行，并在其进行期间显示为运行中状态阶段。该行从解析后的响应中写出，因此无论流式是否开启都会出现。
+- 应答提供商自己的内置函数调用，让 Kimi 的 `$web_search`（声明为 `{ type = "builtin_function", function = { name = "$web_search" } }`）能够完成，而不是作为未知工具失败。声明的调用按参数原样应答，正如该提供商的协议要求，无需确认或结果存储。
+- 通过原样回发消息来恢复提供商在搜索中途暂停的 Anthropic 回合（`stop_reason: "pause_turn"`），而不是在一个看似完整答案的地方结束回合。每次恢复计为一个 agent 步骤，因此受 `max_agent_steps` 约束。
+- 在答案下方列出提供商侧搜索报告的来源。来源仅供显示：存储的答案与模型写出的完全一致，不会有额外内容回放给提供商。
 
-### Fixed
-- Prevent a forced live-follow-up acknowledgement from retaining local tool calls returned despite
-  tools being disabled, which could leave invalid history and make the next answer look duplicated.
-  Provider builtin functions that were still offered remain available.
-- Promote completed streamed text before provider-side tool output, so Responses web search and
-  Anthropic server-tool activity no longer make the answer preview disappear before final output.
-- Publish only the text written after a provider-side tool instead of repeating the promoted
-  opening: a search runs inside one response, so the model keeps writing after it and the answer
-  previously appeared twice in the transcript.
-- Keep token estimation working when a configured `provider.builtin_tools` entry is unsupported on
-  the active wire. `/status`, the status bar, and resuming a session only measure the payload, and
-  raising there took down the frontend over config no request had tried to send; the request that
-  would send it still fails with the same error.
-- Keep the Anthropic extended-thinking budget under the request's own `max_tokens`, which the API
-  requires. With the default `max_tokens = 8192`, `/reason high` and above sent a budget the model
-  could not accept, so every request to a pre-4.6 Claude model failed until `max_tokens` was raised.
-- Send the resolved reasoning effort on OpenRouter's top-level `reasoning` object, like every other
-  reasoning control, so a documented per-model effort scale applies there too.
+### 修复
+- 防止强制的实时后续回执保留在工具被禁用时返回的本地工具调用，这可能会留下无效历史，并让下一个答案看起来重复。仍然提供的提供商内置函数保持可用。
+- 在提供商侧工具输出之前提升已完成的流式文本，Responses 网络搜索和 Anthropic 服务端工具活动不再让答案预览在最终输出之前消失。
+- 只发布提供商侧工具之后写入的文本，而不是重复被提升的开头：搜索在一次响应内运行，模型在它之后继续书写，此前答案会在会话记录中出现两次。
+- 当配置的 `provider.builtin_tools` 条目在活动链路上不受支持时，保持 token 估算可用。`/status`、状态栏和恢复会话只测量载荷，在这些地方抛错会把前端拖垮——只因某个请求从未尝试发送的配置；真正会发送它的请求仍以同样的错误失败。
+- 将 Anthropic 扩展思考预算保持在请求自身 `max_tokens` 之内，这是 API 的要求。在默认 `max_tokens = 8192` 下，`/reason high` 及以上发送的预算是模型无法接受的，因此对 pre-4.6 的 Claude 模型的每个请求都会失败，直到调高 `max_tokens`。
+- 在 OpenRouter 顶层 `reasoning` 对象上发送解析后的推理强度，与所有其他推理控制一致，因此文档化的按模型强度等级在那里同样适用。
 
 
+<!-- 以下为历史版本记录，保留英文原文 -->
 ## 0.18.1 - 2026-07-31
 
 ### Changed
