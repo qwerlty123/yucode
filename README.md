@@ -1,54 +1,46 @@
 <h1 align="center">yucode</h1>
 
 <p align="center">
-  <img src="snapshots/yucode1.gif" alt="yucode editing code and running tools" width="600">
+  <img src="snapshots/yucode1.gif" alt="yucode 编辑代码并运行工具" width="600">
 </p>
 
 <p align="center">
-  A coding agent I use, maintain, and customize, shipped as a small, focused Python package.
+  一个我自己在用、维护并定制的 coding agent。
 </p>
 
-<p align="center"><a href="README.zh-CN.md">中文</a></p>
+<p align="center"><a href="README.md">English</a></p>
 
-## Safety
+## 安全
 
-**Use at your own risk.** yucode can edit files and run shell commands in the environment where it starts. It does not provide sandbox isolation; use a container or VM when needed.
-
-## What it is
-
-yucode does not introduce a new kind of coding agent. It combines familiar features — reading and editing files, running commands, follow-ups, sessions, diffs, MCP, and skills — into a tool I use personally.
-
-It works on real repositories, including its own: I use yucode to build and maintain yucode. Everything ships in a small, focused Python package, so I can change the behavior directly whenever I want the workflow to work differently.
-
-yucode was formerly minacode (and nanocode before that). It started as a single-file agent small enough to be called *nano*; it has since grown beyond a single file, and now goes by yucode.
+**使用风险自负。** yucode 会在启动环境中编辑文件并执行 shell 命令，不提供 sandbox 隔离。需要隔离时，请使用容器或虚拟机。
 
 <p align="center">
-  <img src="snapshots/yucode2.gif" alt="yucode resuming a saved session" width="600">
+  <img src="snapshots/yucode2.gif" alt="yucode 恢复保存的 session" width="600">
 </p>
-<p align="center"><sub>Resuming a saved session with its conversation and tool history.</sub></p>
+<p align="center"><sub>恢复保存的 session，包括对话和工具调用历史。</sub></p>
 
-## Highlights
+## 亮点
 
-- **Prompt-cache aware:** stable request prefixes let supported providers reuse work and can reach 90–99% cache hit rates; `/status` shows the reported result.
-- **Code navigation:** jump to definitions, callers, and implementations with a searchable code index.
-- **Live follow-ups:** type while the agent works; `Enter` queues a message for the next model step, while `Ctrl-C` discards a draft or interrupts the task once the input is empty.
-- **Anchored edits:** structured edits use `line:hash` anchors and reject stale file content.
-- **Resumable sessions:** conversation, tool calls, diffs, and working memory survive `-c` or `--resume`.
-- **Built-in diff viewer:** `/diff` shows the latest round and the net session result.
-- **MCP and skills:** connect Model Context Protocol servers and load Markdown instruction packs on demand.
-- **Provider-side web search:** opt in to a provider's own search tool (OpenAI, Qwen, Anthropic, Z.AI) and see each search and its sources in the transcript.
-- **Provider compatibility:** OpenAI-compatible APIs and Anthropic.
+- **Prompt-cache 友好：** 稳定的请求前缀让支持缓存的 provider 复用计算，缓存命中率可达 90–99%；`/status` 会显示 provider 返回的实际结果。
+- **代码导航：** 通过可搜索的代码索引跳转到定义、调用者和实现。
+- **实时追加指令：** agent 工作时仍可输入；`Enter` 将消息排入下一次模型调用，`Ctrl-C` 先清除草稿，输入为空时中断当前任务。
+- **锚点编辑：** 结构化编辑使用 `line:hash` 锚点，文件内容过期时会被拒绝。
+- **可恢复 session：** 对话、工具调用、diff 和工作记忆可通过 `-c` 或 `--resume` 恢复。
+- **内置 diff viewer：** `/diff` 展示最新一轮改动以及整个 session 的累计变更。
+- **MCP 与 skills：** 按需连接 Model Context Protocol server，加载 Markdown 指令包。
+- **Provider 侧联网搜索：** 可选启用 Provider 自带的搜索工具（OpenAI、Qwen、Anthropic、Z.AI），每次搜索及其来源都会显示在对话记录中。
+- **Provider 兼容：** 支持 OpenAI-compatible API 与 Anthropic。
 
-## Install
+## 安装
 
-Requires macOS or Linux, Python 3.11+, and [uv](https://docs.astral.sh/uv/).
+需要 macOS 或 Linux、Python 3.11+ 和 [uv](https://docs.astral.sh/uv/)。
 
 ```sh
 uv tool install git+https://github.com/qwerlty123/yucode.git
 yucode --init-config
 ```
 
-Add your provider to `~/.yucode/config.toml`:
+在 `~/.yucode/config.toml` 中填写 provider：
 
 ```toml
 [provider]
@@ -60,17 +52,14 @@ key = "sk-..."
 model = "deepseek-v4-flash"
 ```
 
-Then run:
+然后运行：
 
 ```sh
 yucode
 ```
 
-Upgrade with `uv tool upgrade yucode`, which pulls the latest commit from the
-repository.
+升级：`uv tool upgrade yucode`，从仓库拉取最新提交。
 
-## Links
+## 链接
 
-- [Documentation](https://github.com/qwerlty123/yucode) — full usage guide and reference.
-- [Blog post](https://hit9.dev/post/nanocode) — why and how it was built.
-- [code-symbol-index](https://github.com/hit9/code-symbol-index) — the code index library yucode uses.
+- [文档](https://github.com/qwerlty123/yucode) — 完整的使用指南和参考。
