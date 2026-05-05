@@ -10,7 +10,7 @@
 
 工具定义会与消息堆栈一并发送：内置工具、安装了技能时的 `Skill`，以及来自<span class="marker">当前已连接服务器</span>的 MCP tools 与 resources。已配置但未连接的服务器不会占用上下文。
 
-若项目已有跨 session 记忆，yucode 会在新建或恢复 session 时生成一份有界 topic 索引。该快照在 session 生命周期内保持不变，因此不会让每轮请求的缓存前缀漂移；当前 session 新写入的记忆通过 `Memory` 工具结果可见，后续新 session 会加载更新后的索引。记忆正文不会常驻上下文，agent 用 `Memory get/search` 按需读取。
+若项目已有跨 session 记忆，yucode 会在一个 cache generation 的第一次投影时生成一份有界 topic 索引。普通回合中该快照保持不变，因此不会让每轮请求的缓存前缀漂移；当前 session 新写入的记忆通过 `Memory` 工具结果可见。成功 compaction 已经替换旧前缀并开启新的 cache generation，此时会一次性清除内存索引快照，让下一次投影从磁盘加载最新索引。记忆正文不会常驻上下文，agent 用 `Memory get/search` 按需读取。
 
 当模型暴露 reasoning 时，yucode 会把返回的协议数据保存在会话中，但只重放当前 provider 期望的内容。某些 API 要求跨回合保留 reasoning；另一些则会忽略旧的 reasoning（除非启用了 preserved-thinking 选项），但多步工具调用内部仍然需要它。当协议要求时，不透明签名和加密 reasoning 会原样返回，但不会作为模型可读文本展示。
 

@@ -3,7 +3,7 @@ import os
 
 import pytest
 
-from yucode.base import Config, ToolError
+from yucode.base import Config, ModelError, ToolError
 from yucode.context import ContextManager
 from yucode.memory import ProjectMemory
 from yucode.session import Session
@@ -12,6 +12,19 @@ from yucode.tools import MemoryTool
 
 def memory(tmp_path):
     return ProjectMemory(str(tmp_path / "memory"))
+
+
+def memory_context(messages):
+    return next((str(message.get("content") or "") for message in messages if "--- Project Memory" in str(message.get("content") or "")), "")
+
+
+def compactable_messages():
+    return [
+        {"role": "user", "content": "old request"},
+        {"role": "assistant", "content": "old answer"},
+        *({"role": "assistant", "content": f"step {index}"} for index in range(9)),
+        {"role": "user", "content": "latest request"},
+    ]
 
 
 def test_project_memory_persists_topics_and_rebuilds_index(tmp_path):
@@ -96,7 +109,7 @@ def test_memory_tool_validates_action_specific_fields(tmp_path):
         MemoryTool(session, [{"action": "list", "content": "noise"}]).call()
 
 
-def test_memory_context_is_session_stable_and_new_sessions_see_updates(tmp_path):
+def test_memory_context_is_stable_during_ordinary_turns_and_new_sessions_see_updates(tmp_path):
     config = Config(data_dir=str(tmp_path / "data"))
     first = Session(cwd=str(tmp_path / "project"), config=config)
     context = ContextManager(first)
@@ -112,3 +125,64 @@ def test_memory_context_is_session_stable_and_new_sessions_see_updates(tmp_path)
     contents = [str(message.get("content") or "") for message in resumed_context]
     assert any("--- Project Memory (session-start snapshot) ---" in content for content in contents)
     assert any("project-release" in content for content in contents)
+
+
+def test_successful_compaction_refreshes_frozen_memory_context(tmp_path):
+    session = Session(cwd=str(tmp_path / "project"), config=Config(data_dir=str(tmp_path / "data")))
+    assert session.memory is not None
+    session.memory.remember("project-release", "project", "Old release policy", "Old policy")
+    context = ContextManager(session)
+
+    frozen = memory_context(context.model_messages("system"))
+    assert "Old release policy" in frozen
+
+    session.memory.remember("project-release", "project", "New release policy", "New policy")
+    assert memory_context(context.model_messages("system")) == frozen
+
+    session.messages = compactable_messages()
+    compacted, keep = context.compaction_parts()
+    context.apply_compaction({"summary": "compacted"}, keep, compacted=compacted)
+
+    refreshed = memory_context(context.model_messages("system"))
+    assert "New release policy" in refreshed
+    assert "Old release policy" not in refreshed
+
+
+def test_successful_compaction_loads_memory_created_after_empty_snapshot(tmp_path):
+    session = Session(cwd=str(tmp_path / "project"), config=Config(data_dir=str(tmp_path / "data")))
+    assert session.memory is not None
+    context = ContextManager(session)
+
+    assert memory_context(context.model_messages("system")) == ""
+    session.memory.remember("user-response-style", "user", "User prefers concise answers", "Keep answers concise.")
+    assert memory_context(context.model_messages("system")) == ""
+
+    session.messages = compactable_messages()
+    compacted, keep = context.compaction_parts()
+    context.apply_compaction({"summary": "compacted"}, keep, compacted=compacted)
+
+    assert "User prefers concise answers" in memory_context(context.model_messages("system"))
+
+
+def test_compactor_failure_refreshes_memory_after_deterministic_trim(tmp_path):
+    session = Session(cwd=str(tmp_path / "project"), config=Config(data_dir=str(tmp_path / "data")))
+    assert session.memory is not None
+    session.memory.remember("project-release", "project", "Old release policy", "Old policy")
+    context = ContextManager(session)
+    assert "Old release policy" in memory_context(context.model_messages("system"))
+
+    session.memory.remember("project-release", "project", "New release policy", "New policy")
+    session.messages = compactable_messages()
+    session.usage.last_prompt_budget = 1
+    session.usage.last_prompt_tokens = 1
+
+    class FailingModel:
+        def compact(self, _text):
+            raise ModelError("failed")
+
+    projected = context.prepare_messages(FailingModel(), "system", [{"role": "user", "content": "continue"}])
+
+    refreshed = memory_context(projected)
+    assert "New release policy" in refreshed
+    assert "Old release policy" not in refreshed
+    assert session.state.compaction_count == 1

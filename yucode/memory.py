@@ -25,8 +25,9 @@ class ProjectMemory:
     """Persist and recall durable project memory behind one filesystem seam.
 
     Topic files are the fact source; ``MEMORY.md`` is a derived human-readable
-    index. ``context()`` deliberately freezes its first result for the lifetime
-    of this instance, so request projection keeps a stable prompt prefix.
+    index. ``context()`` deliberately freezes its first result within one cache
+    generation; successful compaction calls ``reset_context()`` before the next
+    projection, while ordinary turns keep a stable prompt prefix.
     """
 
     TYPES: ClassVar[tuple[str, ...]] = ("user", "feedback", "project", "reference")
@@ -57,6 +58,11 @@ class ProjectMemory:
         ]
         self._context_snapshot = "\n".join(rows)
         return self._context_snapshot
+
+    def reset_context(self) -> None:
+        """Clear only the cached index so the next cache generation reloads disk."""
+
+        self._context_snapshot = None
 
     def find(self, *, ids: list[str] | None = None, query: str = "", limit: int = 20) -> list[MemoryDocument]:
         """List, retrieve, or text-search memories from the current disk state."""

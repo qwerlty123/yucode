@@ -348,6 +348,10 @@ class ContextManager:
         usage.last_prompt_budget = 0
         usage.last_cached_prompt_tokens = 0
         usage.last_cache_write_prompt_tokens = 0
+        # 上下文替换成功即开启新的 cache generation。普通回合冻结的 Project Memory
+        # 索引在这里一次性失效,让下一次投影从磁盘重建;应用前取消/失败不会到达此处。
+        if self.session.memory is not None:
+            self.session.memory.reset_context()
 
     def prune_tool_records(self, keep_messages: list[Json]) -> None:
         records = self.session.tool_records
