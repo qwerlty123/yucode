@@ -4,8 +4,6 @@
 
 yucode 在你的终端中工作：你描述一个任务，它读取代码、编辑文件、运行命令，然后汇报结果。它保持 <span class="marker">稳定的提示词前缀</span>，让支持的 provider 能复用已完成的工作；维护可搜索的代码索引、运行后台任务、记录自己的工作笔记，并能 <span class="marker">从上次停下的地方继续</span>。
 
-yucode 的前身是 nanocode，在超出当初让它得名 *nano* 的单个文件规模后更名而来。
-
 ```{figure} ../snapshots/yucode1.gif
 :alt: yucode 在同一个交互会话中编辑代码并运行工具
 :width: 600px
@@ -71,10 +69,3 @@ mcp
 skills
 ```
 
-```{toctree}
-:hidden:
-:maxdepth: 1
-:titlesonly:
-
-changelog
-```

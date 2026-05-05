@@ -1,5 +1,4 @@
 include LICENSE
-include README.zh-CN.md
 recursive-include yucode/builtin_skills *.md
 prune demo*
 prune tests

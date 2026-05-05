@@ -8,8 +8,6 @@
   一个我自己在用、维护并定制的 coding agent。
 </p>
 
-<p align="center"><a href="README.md">English</a></p>
-
 ## 安全
 
 **使用风险自负。** yucode 会在启动环境中编辑文件并执行 shell 命令，不提供 sandbox 隔离。需要隔离时，请使用容器或虚拟机。

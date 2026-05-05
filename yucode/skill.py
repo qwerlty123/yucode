@@ -40,10 +40,6 @@ class SkillLibrary:
         # 后面的根目录覆盖前面的:项目可以定制用户技能,用户也可以定制 yucode 自带的只读技能。
         builtin_skills = os.path.join(os.path.dirname(__file__), "builtin_skills")
         project_skills = os.path.join(session.cwd, ".yucode", "skills")
-        if not os.path.isdir(project_skills):
-            legacy_skills = os.path.join(session.cwd, ".nanocode", "skills")
-            if os.path.isdir(legacy_skills):
-                project_skills = legacy_skills
         for root, source in (
             (builtin_skills, "builtin"),
             (session.data_path("skills"), "user"),

@@ -114,7 +114,7 @@ yucode 内置**代码符号索引**，用于<span class="marker">结构化导航
 
 ### 它是什么
 
-索引是一个静态的符号数据库（函数、类、方法、变量等），内容提取自你项目的源文件。它由名为 [code-symbol-index](https://github.com/hit9/code-symbol-index) 的库构建，该库支持广泛的编程语言。
+索引是一个静态的符号数据库（函数、类、方法、变量等），内容提取自你项目的源文件。它由开源的 code-symbol-index 符号索引库构建，支持广泛的编程语言。
 
 当索引可用时，`InspectCode` 工具可以：
 
