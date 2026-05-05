@@ -70,7 +70,7 @@ class ContextManager:
             {"role": "system", "content": base_system.strip()},
             {"role": "user", "content": "--- Environment ---\n" + (self.environment() or "(empty)")},
         ]
-        for context in (self.skills_context(), self.mcp_tools_context()):
+        for context in (self.memory_context(), self.skills_context(), self.mcp_tools_context()):
             if context:
                 messages.append({"role": "user", "content": context})  # 空上下文跳过,顺序固定
         conversation = [*self.session.messages, *(turn_messages or [])]  # 已提交历史 + 本轮暂存消息
@@ -130,6 +130,9 @@ class ContextManager:
 
     def mcp_tools_context(self) -> str:
         return self.session.mcp.render_tools_index() if self.session.mcp else ""  # 无 MCP 管理器时返回空串
+
+    def memory_context(self) -> str:
+        return self.session.memory.context() if self.session.memory else ""  # Module 内部冻结为会话稳定的启动快照
 
     def skills_context(self) -> str:
         return self.session.skills.index() if self.session.skills else ""

@@ -6,7 +6,7 @@ from yucode.tools.ask import AskSpec, AskTool
 from yucode.tools.base import Tool
 from yucode.tools.files import Edit, EditApplyResult, EditTool, ReadTool, ViewImageTool
 from yucode.tools.mcp import MCPTool
-from yucode.tools.memory import NextHintsTool, NoteTool, RecallContextTool, RecallTool
+from yucode.tools.memory import MemoryTool, NextHintsTool, NoteTool, RecallContextTool, RecallTool
 from yucode.tools.search import CodeIndex, InspectCodeTool, SearchTool
 from yucode.tools.shell import BashTool, JobTool
 from yucode.tools.skill import SkillTool
@@ -23,6 +23,7 @@ TOOLS: tuple[type[Tool], ...] = (
     JobTool,
     RecallTool,
     RecallContextTool,
+    MemoryTool,
     NoteTool,
     NextHintsTool,
     AskTool,
@@ -42,6 +43,7 @@ __all__ = [
     "InspectCodeTool",
     "JobTool",
     "MCPTool",
+    "MemoryTool",
     "NextHintsTool",
     "NoteTool",
     "ReadTool",

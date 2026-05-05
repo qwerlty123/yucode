@@ -7,6 +7,7 @@ import re
 from typing import ClassVar, cast
 
 from yucode.base import Json, ToolArgs, ToolError
+from yucode.memory import MemoryDocument
 from yucode.session import AgentState, HistorySegment, PlanItem
 from yucode.tools.base import Tool
 
@@ -248,6 +249,103 @@ class RecallContextTool(Tool):
     @staticmethod
     def match_row(segment: HistorySegment, location: str, text: str) -> str:
         return f"- {segment.key} {location} title={json.dumps(segment.title)}: {Tool.compact(text, 300)}"
+
+
+class MemoryTool(Tool):
+    NAME = "Memory"
+    DESCRIPTION = (
+        "Persist and recall project-scoped memory across sessions. Save only durable user preferences, feedback, non-derivable project context, and external references; "
+        "never save secrets, current task state, or facts readily derived from code or git."
+    )
+    EXAMPLE = (
+        'Recall a topic. Example: {"action":"get","id":"feedback-real-database-tests"}',
+        'Save or update a topic. Example: {"action":"remember","id":"user-response-style","type":"user","description":"User prefers concise answers","content":"Keep final answers concise."}',
+    )
+    STORES_RESULT = False
+    MUTATES = True  # 写调用必须与其他变更序列化;读调用共用一个 schema,轻量版不拆第二个工具。
+    DEFAULT_LIMIT = 20
+    MAX_LIMIT = 100
+
+    def needs_confirmation(self) -> bool:
+        # 项目 memory 是可由同一工具更新/遗忘的 agent 元数据,不弹工作区写入确认。
+        return False
+
+    @classmethod
+    def params_schema(cls) -> Json:
+        # fmt: off
+        return cls.object_schema({
+            "action": {"type": "string", "enum": ["list", "get", "search", "remember", "forget"], "description": "Memory operation"},
+            "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$", "description": "Stable semantic topic id"},
+            "type": {"type": "string", "enum": ["user", "feedback", "project", "reference"], "description": "Memory type for remember"},
+            "description": {"type": "string", "description": "Specific one-line hook used by future sessions"},
+            "content": {"type": "string", "description": "Durable memory body; feedback/project entries should include why and how to apply"},
+            "query": {"type": "string", "description": "Case-insensitive plain-text search over ids, descriptions, and bodies"},
+            "limit": {"type": "integer", "minimum": 1, "maximum": cls.MAX_LIMIT, "description": f"Maximum list/search results; default {cls.DEFAULT_LIMIT}"},
+        }, ["action"])
+        # fmt: on
+
+    def call(self) -> str:
+        request = self.request()
+        store = self.session.memory
+        if store is None:
+            raise ToolError("Memory is unavailable for this session")
+        action = request["action"]
+        if action == "list":
+            return json.dumps({"memories": [self.header(memory) for memory in store.find(limit=request["limit"])]}, ensure_ascii=False)
+        if action == "search":
+            memories = store.find(query=request["query"], limit=request["limit"])
+            return json.dumps({"memories": [{**self.header(memory), "preview": Tool.compact(memory.content, 300)} for memory in memories]}, ensure_ascii=False)
+        if action == "get":
+            memories = store.find(ids=[request["id"]], limit=1)
+            memory = memories[0] if memories else None
+            return json.dumps(
+                {"memory": ({**self.header(memory), "content": memory.content} if memory is not None else None)},
+                ensure_ascii=False,
+            )
+        if action == "remember":
+            memory = store.remember(request["id"], request["type"], request["description"], request["content"])
+            return json.dumps({"ok": True, "memory": self.header(memory)}, ensure_ascii=False)
+        return json.dumps({"ok": store.forget(request["id"]), "id": request["id"]}, ensure_ascii=False)
+
+    def request(self) -> Json:
+        payload = {key: value for key, value in self.single_dict_arg("Memory requires an action").items() if value is not None}
+        action = payload.get("action")
+        if action not in {"list", "get", "search", "remember", "forget"}:
+            raise ToolError("Memory action must be list, get, search, remember, or forget")
+        fields = {
+            "list": {"action", "limit"},
+            "search": {"action", "query", "limit"},
+            "get": {"action", "id"},
+            "remember": {"action", "id", "type", "description", "content"},
+            "forget": {"action", "id"},
+        }[action]
+        if unexpected := sorted(set(payload) - fields):
+            raise ToolError("Memory unexpected field for " + action + ": " + ", ".join(unexpected))
+        if action in {"get", "forget"} and not str(payload.get("id") or "").strip():
+            raise ToolError(f"Memory {action} requires id")
+        if action == "search" and not str(payload.get("query") or "").strip():
+            raise ToolError("Memory search requires query")
+        if action == "remember":
+            missing = [field for field in ("id", "type", "description", "content") if not str(payload.get(field) or "").strip()]
+            if missing:
+                raise ToolError("Memory remember requires: " + ", ".join(missing))
+        limit = payload.get("limit", self.DEFAULT_LIMIT)
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= self.MAX_LIMIT:
+            raise ToolError(f"Memory limit must be 1..{self.MAX_LIMIT}")
+        return {**payload, "limit": limit}
+
+    def short_args(self) -> list[str]:
+        request = self.request()
+        action = request["action"]
+        if action == "list":
+            return [f"list {request['limit']}"]
+        if action == "search":
+            return ["search " + json.dumps(request["query"], ensure_ascii=False)]
+        return [action + " " + request["id"]]
+
+    @staticmethod
+    def header(memory: MemoryDocument) -> Json:
+        return {"id": memory.id, "type": memory.type, "description": memory.description}
 
 
 class NoteTool(Tool):

@@ -4,11 +4,13 @@
 
 ## 模型收到的内容
 
-<div class="term-shot" role="img" aria-label="从首到尾的消息上下文：系统指令、含会话启动时间的项目环境、可选的技能与 MCP 索引，然后是一份只追加的对话，包含用户消息、助手回复、工具结果、Note 状态变更、恢复事件以及偶尔出现的上下文压缩检查点。"><span class="fs-goal">─ 稳定会话前缀 ─────────────────────────────</span><span>  系统指令      <span class="fs-i fs-dim">agent 应如何工作</span></span><span>  项目环境      <span class="fs-i fs-dim">目录 · 本地启动时间 · 操作系统 · shell</span></span><span>  技能与 MCP 索引   <span class="fs-i fs-dim">仅在可用时</span></span><span class="fs-goal">─ 只追加对话 ──────────────────────────</span><span>  用户 · 助手 · 工具 <span class="fs-i fs-dim">常规回合历史</span></span><span>  Note 调用与结果   <span class="fs-i fs-dim">目标 · 计划 · 事实 · 检查</span></span><span>  生命周期事件         <span class="fs-i fs-dim">按用户本地时区的恢复时间</span></span><span>  当前回合             <span class="fs-i fs-dim">始终最后追加</span></span></div>
+<div class="term-shot" role="img" aria-label="从首到尾的消息上下文：系统指令、含会话启动时间的项目环境、可选的项目记忆、技能与 MCP 索引，然后是一份只追加的对话，包含用户消息、助手回复、工具结果、Note 状态变更、恢复事件以及偶尔出现的上下文压缩检查点。"><span class="fs-goal">─ 稳定会话前缀 ─────────────────────────────</span><span>  系统指令      <span class="fs-i fs-dim">agent 应如何工作</span></span><span>  项目环境      <span class="fs-i fs-dim">目录 · 本地启动时间 · 操作系统 · shell</span></span><span>  项目记忆、技能与 MCP 索引   <span class="fs-i fs-dim">仅在可用时</span></span><span class="fs-goal">─ 只追加对话 ──────────────────────────</span><span>  用户 · 助手 · 工具 <span class="fs-i fs-dim">常规回合历史</span></span><span>  Note 调用与结果   <span class="fs-i fs-dim">目标 · 计划 · 事实 · 检查</span></span><span>  生命周期事件         <span class="fs-i fs-dim">按用户本地时区的恢复时间</span></span><span>  当前回合             <span class="fs-i fs-dim">始终最后追加</span></span></div>
 
 环境只在会话开始时记录一次启动时间，格式为带数值时区偏移的本地 ISO 时间戳，例如 `2026-07-30T20:34:56+08:00`。恢复会话时会追加一条携带新本地时间的用户角色生命周期事件。这些时间戳用户和模型都可以直接读取；无需进行 UTC 转换，后续请求中也不会插入不断变化的日期块。
 
 工具定义会与消息堆栈一并发送：内置工具、安装了技能时的 `Skill`，以及来自<span class="marker">当前已连接服务器</span>的 MCP tools 与 resources。已配置但未连接的服务器不会占用上下文。
+
+若项目已有跨 session 记忆，yucode 会在新建或恢复 session 时生成一份有界 topic 索引。该快照在 session 生命周期内保持不变，因此不会让每轮请求的缓存前缀漂移；当前 session 新写入的记忆通过 `Memory` 工具结果可见，后续新 session 会加载更新后的索引。记忆正文不会常驻上下文，agent 用 `Memory get/search` 按需读取。
 
 当模型暴露 reasoning 时，yucode 会把返回的协议数据保存在会话中，但只重放当前 provider 期望的内容。某些 API 要求跨回合保留 reasoning；另一些则会忽略旧的 reasoning（除非启用了 preserved-thinking 选项），但多步工具调用内部仍然需要它。当协议要求时，不透明签名和加密 reasoning 会原样返回，但不会作为模型可读文本展示。
 

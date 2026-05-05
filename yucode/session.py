@@ -37,6 +37,7 @@ from yucode.prompts import COMPACTION_SUMMARY_TITLE, LIVE_FOLLOWUP_PREFIX, WORKI
 
 if TYPE_CHECKING:
     from yucode.mcp import MCPManager
+    from yucode.memory import ProjectMemory
     from yucode.skill import SkillLibrary
 
 
@@ -1037,6 +1038,7 @@ class Session:
     update: UpdateStatus = field(default_factory=UpdateStatus)
     mcp: MCPManager | None = None
     skills: SkillLibrary | None = None
+    memory: ProjectMemory | None = field(default=None, repr=False)
     images: ImageInputs = field(init=False, repr=False)
     _gitignore_cache: dict[str, tuple[int, list[str]]] = field(default_factory=dict)  # (mtime, 规则) 缓存,避免重复解析 .gitignore
     uid: str = ""
@@ -1064,6 +1066,11 @@ class Session:
             from yucode.skill import SkillLibrary  # 局部导入:skill 构建在 session 之上,避免循环依赖
 
             self.skills = SkillLibrary.load(self)
+        if self.memory is None:
+            from yucode.memory import ProjectMemory  # 局部导入:memory 是 session 之上的纵向功能 Module
+
+            directory = os.path.join(SessionSnapshotStore.project_dir(self.config.data_dir, self.cwd), "memory")
+            self.memory = ProjectMemory(directory)
 
     def store_turn_diff(
         self,

@@ -24,6 +24,7 @@
 - **实时追加指令：** agent 工作时仍可输入；`Enter` 将消息排入下一次模型调用，`Ctrl-C` 先清除草稿，输入为空时中断当前任务。
 - **锚点编辑：** 结构化编辑使用 `line:hash` 锚点，文件内容过期时会被拒绝。
 - **可恢复 session：** 对话、工具调用、diff 和工作记忆可通过 `-c` 或 `--resume` 恢复。
+- **跨 session 项目记忆：** agent 可把用户偏好、反馈和代码中无法推导的项目背景保存为项目级 Markdown topic，并在新 session 中按需召回。
 - **内置 diff viewer：** `/diff` 展示最新一轮改动以及整个 session 的累计变更。
 - **MCP 与 skills：** 按需连接 Model Context Protocol server，加载 Markdown 指令包。
 - **Provider 侧联网搜索：** 可选启用 Provider 自带的搜索工具（OpenAI、Qwen、Anthropic、Z.AI），每次搜索及其来源都会显示在对话记录中。
