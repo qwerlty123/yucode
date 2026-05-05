@@ -1,0 +1,26 @@
+schema_version = 2
+id = "provider-strict-tools"
+prompt = "prompt.md"
+targets = ["agent.strict_tools"]
+profile = "strict_tools"
+category = "provider"
+allowed_tools = ["Edit"]
+step_budget = 3
+expected_artifact = "strict-tools.txt"
+scenario = "scenario.json"
+protocol_checks = ["strict-schema-active"]
+
+[source]
+type = "local"
+path = "source"
+
+[environment]
+image = "python:3.12"
+network = "provider-only"
+
+[grader]
+path = "grader"
+command = ["python3", "{grader}/grade.py"]
+
+[success]
+require = ["within_budget", "verifier_passed", "expected_artifact_exists", "normal_success_stop"]

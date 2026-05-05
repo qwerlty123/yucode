@@ -58,6 +58,9 @@ dev = [
     "pytest>=8.0",
     "ruff==0.16.0",
 ]
+eval = [
+    "swebench==4.1.0",
+]
 
 [tool.setuptools]
 packages = ["yucode", "yucode.builtin_skills", "yucode.tools"]
@@ -67,6 +70,7 @@ yucode = ["builtin_skills/*/SKILL.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
 
 [tool.ruff]
 line-length = 160
@@ -77,6 +81,6 @@ extend-select = ["F403"]
 per-file-ignores = { "yucode/__init__.py" = ["F401"] }
 
 [tool.pyright]
-include = ["yucode"]
+include = ["yucode", "evals", "tests/test_evals_v2.py"]
 pythonVersion = "3.11"
 typeCheckingMode = "basic"

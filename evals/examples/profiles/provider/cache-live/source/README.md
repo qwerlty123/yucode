@@ -1,0 +1,1 @@
+cache telemetry fixture

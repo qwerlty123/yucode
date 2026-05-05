@@ -1,0 +1,7 @@
+{
+  "rounds": [
+    {"provider": "@active", "prompt": "Reply with exactly: first provider ready"},
+    {"provider": "@alternate", "prompt": "In this same session, create provider-switch.txt containing exactly switched followed by a newline."}
+  ],
+  "expect": {"provider_rounds_min": 2, "provider_distinct_min": 2, "files_present": ["provider-switch.txt"]}
+}

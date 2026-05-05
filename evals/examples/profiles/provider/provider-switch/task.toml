@@ -1,0 +1,26 @@
+schema_version = 2
+id = "provider-same-session-switch"
+prompt = "prompt.md"
+targets = ["product.provider_switch"]
+profile = "provider_switch"
+category = "provider"
+allowed_tools = ["Edit"]
+step_budget = 3
+expected_artifact = "provider-switch.txt"
+scenario = "scenario.json"
+protocol_checks = ["same-session-provider-switch"]
+
+[source]
+type = "local"
+path = "source"
+
+[environment]
+image = "python:3.12"
+network = "provider-only"
+
+[grader]
+path = "grader"
+command = ["python3", "{grader}/grade.py"]
+
+[success]
+require = ["within_budget", "verifier_passed", "expected_artifact_exists", "normal_success_stop"]

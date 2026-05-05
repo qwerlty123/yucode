@@ -1,0 +1,26 @@
+schema_version = 2
+id = "provider-coding-indexed"
+prompt = "prompt.md"
+targets = ["agent.coding.patch", "agent.code_index"]
+profile = "coding_indexed"
+category = "coding"
+allowed_tools = ["InspectCode", "Edit"]
+step_budget = 10
+expected_artifact = "indexed.txt"
+scenario = "scenario.json"
+protocol_checks = ["index-prebuilt"]
+
+[source]
+type = "local"
+path = "source"
+
+[environment]
+image = "python:3.12"
+network = "provider-only"
+
+[grader]
+path = "grader"
+command = ["python3", "{grader}/grade.py"]
+
+[success]
+require = ["within_budget", "verifier_passed", "expected_artifact_exists", "normal_success_stop"]

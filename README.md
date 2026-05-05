@@ -58,6 +58,10 @@ yucode
 
 升级：`uv tool upgrade yucode`，从仓库拉取最新提交。
 
+## 开发者评测
+
+仓库包含一个不随 wheel 发布的 coding-agent 评测工具，支持私有任务集、Docker 隔离、重复运行、配对比较和官方 SWE-bench Verified harness。启动方法与指标解释见 [evals/README.md](evals/README.md)。它不会改变 `yucode` 的安装、使用或 GitHub 发布流程。
+
 ## 链接
 
 - [文档](https://github.com/qwerlty123/yucode) — 完整的使用指南和参考。

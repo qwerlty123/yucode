@@ -1,0 +1,26 @@
+schema_version = 2
+id = "provider-live-cache-telemetry"
+prompt = "prompt.md"
+targets = ["agent.cache_live"]
+profile = "cache_live"
+category = "provider"
+allowed_tools = []
+step_budget = 1
+expected_artifact = "README.md"
+scenario = "scenario.json"
+protocol_checks = ["cache-token-telemetry"]
+
+[source]
+type = "local"
+path = "source"
+
+[environment]
+image = "python:3.12"
+network = "provider-only"
+
+[grader]
+path = "grader"
+command = ["python3", "{grader}/grade.py"]
+
+[success]
+require = ["within_budget", "verifier_passed", "expected_artifact_exists", "normal_success_stop"]

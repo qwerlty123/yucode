@@ -1,0 +1,13 @@
+schema_version = 1
+base_profile = "coding_default"
+repetitions = 3
+controlled_fields = ["tasks", "defaults", "agent_config.provider", "agent_config.model", "agent_config.api"]
+expected_differences = ["agent_config.temperature"]
+subject = "agent_mechanism"
+single_factor = true
+
+[variants.deterministic]
+"agent_config.temperature" = 0.0
+
+[variants.exploratory]
+"agent_config.temperature" = 0.2

@@ -1,0 +1,27 @@
+schema_version = 2
+id = "provider-vision-tool"
+prompt = "prompt.md"
+targets = ["agent.vision"]
+profile = "vision_tool"
+category = "vision"
+allowed_tools = ["ViewImage", "Edit"]
+step_budget = 5
+expected_artifact = "vision-tool.txt"
+attachments = ["sample.png.b64"]
+scenario = "scenario.json"
+protocol_checks = ["view-image-call-observed"]
+
+[source]
+type = "local"
+path = "source"
+
+[environment]
+image = "python:3.12"
+network = "provider-only"
+
+[grader]
+path = "grader"
+command = ["python3", "{grader}/grade.py"]
+
+[success]
+require = ["within_budget", "verifier_passed", "expected_artifact_exists", "normal_success_stop"]

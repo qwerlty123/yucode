@@ -1,0 +1,7 @@
+{
+  "rounds": [
+    {"prompt": "Return exactly the word cache-ready. The deterministic cache probe prefix is YUCODE-EVAL-CACHE-PROBE-2026."},
+    {"prompt": "Return exactly the word cache-ready. The deterministic cache probe prefix is YUCODE-EVAL-CACHE-PROBE-2026."}
+  ],
+  "expect": {"cached_tokens_min": 1, "provider_rounds_min": 2}
+}

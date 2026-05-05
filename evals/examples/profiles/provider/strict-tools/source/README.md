@@ -1,0 +1,1 @@
+strict tools fixture

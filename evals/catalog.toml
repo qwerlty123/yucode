@@ -1,0 +1,125 @@
+schema_version = 1
+
+[[capabilities]]
+id = "agent.coding.patch"
+subject = "agent_capability"
+support = "shipped"
+profiles = ["coding_default", "coding_indexed", "command_coding"]
+claim = "Produces a code patch whose behavior is verified by a hidden grader."
+requirements = []
+evidence = ["yucode/engine.py", "yucode/tools/files.py", "tests/test_full_flow.py"]
+exclusions = ["Docker isolation belongs to the evaluation harness"]
+
+[[capabilities]]
+id = "agent.code_index"
+subject = "agent_capability"
+support = "conditional"
+profiles = ["coding_indexed"]
+claim = "Uses InspectCode after a code index has been built."
+requirements = ["code_index"]
+evidence = ["yucode/tools/search.py", "tests/test_tools.py"]
+exclusions = []
+
+[[capabilities]]
+id = "agent.vision"
+subject = "agent_capability"
+support = "conditional"
+profiles = ["vision_tool", "vision_attachment"]
+claim = "Supplies local images through ViewImage or UserInput when the model accepts image input."
+requirements = ["image_input"]
+evidence = ["yucode/image.py", "tests/test_images.py"]
+exclusions = ["Not supported by every provider or model"]
+
+[[capabilities]]
+id = "agent.provider_tools"
+subject = "agent_capability"
+support = "conditional"
+profiles = ["provider_tools"]
+claim = "Uses provider builtin tools when the active provider, wire and account support them."
+requirements = ["provider_tools"]
+evidence = ["yucode/model.py", "tests/test_builtin_tools.py"]
+exclusions = ["Network results are non-deterministic"]
+
+[[capabilities]]
+id = "product.provider_switch"
+subject = "product_interface"
+support = "conditional"
+profiles = ["provider_switch"]
+claim = "Switches provider or wire inside the same semantic session."
+requirements = ["provider_configured", "provider_switch"]
+evidence = ["yucode/loop.py", "tests/test_command_ui.py"]
+exclusions = ["Does not claim equivalent outputs across providers"]
+
+[[capabilities]]
+id = "agent.strict_tools"
+subject = "agent_mechanism"
+support = "conditional"
+profiles = ["strict_tools"]
+claim = "Uses strict tool schemas where the active provider profile supports them."
+requirements = ["strict_tools"]
+evidence = ["yucode/tools/base.py", "tests/test_tools.py"]
+exclusions = []
+
+[[capabilities]]
+id = "agent.cache_live"
+subject = "agent_mechanism"
+support = "conditional"
+profiles = ["cache_live"]
+claim = "Records cache read and write token telemetry returned by the provider."
+requirements = ["cache_telemetry"]
+evidence = ["yucode/base.py", "tests/test_full_flow.py"]
+exclusions = ["No fixed cache hit-rate guarantee"]
+
+[profiles.coding_default]
+driver = "yucode"
+tools = ["Read", "Search", "Edit", "Bash", "Job", "Recall", "RecallContext", "Note"]
+requirements = ["provider_configured"]
+release_eligible = true
+
+[profiles.coding_indexed]
+driver = "yucode"
+tools = ["Read", "Search", "InspectCode", "Edit", "Bash", "Job", "Recall", "RecallContext", "Note"]
+requirements = ["provider_configured", "code_index"]
+release_eligible = true
+
+[profiles.command_coding]
+driver = "command"
+tools = []
+requirements = []
+release_eligible = true
+
+[profiles.vision_tool]
+driver = "yucode"
+tools = ["Read", "ViewImage", "Edit"]
+requirements = ["provider_configured", "image_input"]
+release_eligible = true
+
+[profiles.vision_attachment]
+driver = "yucode"
+tools = ["Read", "Edit"]
+requirements = ["provider_configured", "image_input"]
+release_eligible = true
+
+[profiles.provider_tools]
+driver = "yucode"
+tools = []
+requirements = ["provider_configured", "provider_tools"]
+release_eligible = true
+
+[profiles.provider_switch]
+driver = "yucode"
+tools = ["Edit"]
+requirements = ["provider_configured", "provider_switch"]
+release_eligible = true
+
+[profiles.strict_tools]
+driver = "yucode"
+tools = ["Read", "Search", "Edit"]
+requirements = ["provider_configured", "strict_tools"]
+release_eligible = true
+
+[profiles.cache_live]
+driver = "yucode"
+tools = ["Read"]
+requirements = ["provider_configured", "cache_telemetry"]
+release_eligible = true

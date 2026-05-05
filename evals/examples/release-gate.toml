@@ -1,0 +1,3 @@
+[gate]
+# Add pass_at_1, all_at_k, capability thresholds, or relative budgets only
+# after recording a clean comparable baseline. Structural checks always run.

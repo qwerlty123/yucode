@@ -1,0 +1,24 @@
+schema_version = 2
+id = "provider-coding-default"
+prompt = "prompt.md"
+targets = ["agent.coding.patch"]
+profile = "coding_default"
+category = "coding"
+allowed_tools = ["Read", "Search", "Edit", "Bash", "Job"]
+step_budget = 12
+expected_artifact = "coding-default.txt"
+
+[source]
+type = "local"
+path = "source"
+
+[environment]
+image = "python:3.12"
+network = "provider-only"
+
+[grader]
+path = "grader"
+command = ["python3", "{grader}/grade.py"]
+
+[success]
+require = ["within_budget", "verifier_passed", "expected_artifact_exists", "normal_success_stop"]

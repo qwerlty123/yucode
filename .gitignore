@@ -23,3 +23,7 @@ core.*
 .playwright-cli/
 .DS_Store
 yucode/.DS_Store
+docs/research/agent-project-resume-references.md
+docs/research/campus-agent-resume-writing-samples.md
+docs/research/mainstream-code-agent-gap-analysis.md
+docs/resume-yucode-star.md

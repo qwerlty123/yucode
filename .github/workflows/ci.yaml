@@ -34,8 +34,8 @@ jobs:
 
       - name: Run lint and type checks
         run: |
-          uv run ruff check yucode
-          uv run ruff format --check yucode
+          uv run ruff check yucode evals tests/test_evals_v2.py
+          uv run ruff format --check yucode evals tests/test_evals_v2.py
           uv run pyright
 
       - name: Run tests
