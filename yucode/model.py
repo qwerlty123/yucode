@@ -44,6 +44,7 @@ from yucode.image import IMAGE_REFS_KEY, TOOL_IMAGE_OBSERVATION_KEY, ImageInputs
 from yucode.model_catalog import THINKING_BUDGETS
 from yucode.prompts import (
     COMPACTION_PROMPT,
+    MEMORY_CONSOLIDATION_PROMPT,
 )
 from yucode.provider_compat import (
     ResolvedProvider,
@@ -412,7 +413,14 @@ class ModelClient:
             request_budget_for(self.session.settings.max_context_tokens, self.session.config.provider.output_token_budget()),
         )
 
-    def chat_request(self, messages: list[Json], tools: list[Json] | None = None, *, allow_stream: bool = True) -> tuple[Json, list[ToolCall], str]:
+    def chat_request(
+        self,
+        messages: list[Json],
+        tools: list[Json] | None = None,
+        *,
+        allow_stream: bool = True,
+        include_builtin_tools: bool = True,
+    ) -> tuple[Json, list[ToolCall], str]:
         messages = self.chat_messages(messages)
         provider = self.session.config.provider
         resolved = provider.resolve()
@@ -420,11 +428,12 @@ class ModelClient:
         params: Json = {"model": provider.model, "messages": messages, "stream": stream}
         if provider.max_tokens > 0:  # 0 表示不设上限:不发送该字段
             params["max_tokens"] = provider.max_tokens
-        if request_tools := [*(tools or []), *self.builtin_tools(resolved)]:  # 本地工具 + provider 内置工具合并;非空才发 tools
+        builtin = self.builtin_tools(resolved) if include_builtin_tools else []
+        if request_tools := [*(tools or []), *builtin]:  # 本地工具 + provider 内置工具合并;非空才发 tools
             params["tools"] = request_tools
             params["tool_choice"] = "auto"  # 显式要求 auto,避免部分主机默认拒绝工具
             params["parallel_tool_calls"] = True
-        prompt_cache_key = self.prompt_cache_key(provider, tools)
+        prompt_cache_key = self.prompt_cache_key(provider, tools, include_builtin_tools=include_builtin_tools)
         if prompt_cache_key:
             params["prompt_cache_key"] = prompt_cache_key  # 兼容部分兼容主机自定义的 prompt cache 字段
         self.apply_provider_params(params, provider, resolved)  # 应用 reasoning/thinking 等协议兼容参数
@@ -572,7 +581,14 @@ class ModelClient:
             message["tool_calls"] = [tool_calls[index] for index in sorted(tool_calls)]  # 按 index 升序输出
         return message, usage, finish_reason
 
-    def api_request(self, messages: list[Json], tools: list[Json] | None, *, allow_stream: bool = True) -> tuple[Json, list[ToolCall], str]:
+    def api_request(
+        self,
+        messages: list[Json],
+        tools: list[Json] | None,
+        *,
+        allow_stream: bool = True,
+        include_builtin_tools: bool = True,
+    ) -> tuple[Json, list[ToolCall], str]:
         api = self.session.config.provider.resolve().api  # 按 provider 解析出的协议分派
         if api == "anthropic":
             request = self.anthropic_request
@@ -580,9 +596,20 @@ class ModelClient:
             request = self.responses_request
         else:
             request = self.chat_request
-        return request(messages, tools) if allow_stream else request(messages, tools, allow_stream=False)  # allow_stream=False 用于压缩等必须一次返回的场景
+        if include_builtin_tools:
+            return request(messages, tools) if allow_stream else request(messages, tools, allow_stream=False)
+        return (
+            request(messages, tools, include_builtin_tools=False) if allow_stream else request(messages, tools, allow_stream=False, include_builtin_tools=False)
+        )  # allow_stream=False 用于压缩等必须一次返回的场景
 
-    def responses_request(self, messages: list[Json], tools: list[Json] | None, *, allow_stream: bool = True) -> tuple[Json, list[ToolCall], str]:
+    def responses_request(
+        self,
+        messages: list[Json],
+        tools: list[Json] | None,
+        *,
+        allow_stream: bool = True,
+        include_builtin_tools: bool = True,
+    ) -> tuple[Json, list[ToolCall], str]:
         provider = self.session.config.provider
         resolved = provider.resolve()
         stream = allow_stream and provider.stream and self.on_stream is not None  # 与 chat 路径相同的流式条件
@@ -594,11 +621,12 @@ class ModelClient:
         }
         if provider.max_tokens > 0:
             params["max_output_tokens"] = provider.max_tokens  # Responses 协议中输出上限叫 max_output_tokens
-        if request_tools := [*self.responses_tool_schemas(tools or []), *self.builtin_tools(resolved)]:
+        builtin = self.builtin_tools(resolved) if include_builtin_tools else []
+        if request_tools := [*self.responses_tool_schemas(tools or []), *builtin]:
             params["tools"] = request_tools
             params["tool_choice"] = "auto"
             params["parallel_tool_calls"] = True
-        if prompt_cache_key := self.prompt_cache_key(provider, tools):
+        if prompt_cache_key := self.prompt_cache_key(provider, tools, include_builtin_tools=include_builtin_tools):
             params["prompt_cache_key"] = prompt_cache_key
         # 无状态请求默认返回加密 reasoning 条目,因此下面的回放不需要 `include`;
         # effort 与 chat 路径一样走兼容折叠;当 reasoning 关闭时,定义了显式 "off" 写法的
@@ -868,26 +896,33 @@ class ModelClient:
         return {}
 
     def compact(self, context: str) -> Json:
-        self.cancel_requested.clear()  # 压缩请求不受上一次取消的影响
-        messages = [{"role": "system", "content": COMPACTION_PROMPT}, {"role": "user", "content": Text.clean(context)}]  # 一次独立调用,不带历史与工具
-        _, _, content = self.api_request(messages, None, allow_stream=False)  # 压缩必须一次返回,不走流式
-        data = self.parse_json_object(content)
-        if not isinstance(data, dict):
-            raise ModelError("compactor returned non-object JSON")  # 非对象输出无法应用
-        return data
+        return self.internal_json_request(COMPACTION_PROMPT, context, source="compactor")
+
+    def consolidate_memory(self, context: str) -> Json:
+        """Run one isolated, non-streaming, tool-free memory-maintenance request."""
+
+        return self.internal_json_request(MEMORY_CONSOLIDATION_PROMPT, context, source="memory consolidator")
+
+    def internal_json_request(self, system: str, context: str, *, source: str) -> Json:
+        self.cancel_requested.clear()  # 内部请求不受上一次主回合取消状态影响
+        messages = [{"role": "system", "content": system}, {"role": "user", "content": Text.clean(context)}]
+        _, calls, content = self.api_request(messages, [], allow_stream=False, include_builtin_tools=False)
+        if calls:
+            raise ModelError(f"{source} returned an unexpected tool call")
+        return self.parse_json_object(content, source=source)
 
     @classmethod
-    def parse_json_object(cls, text: str) -> Json:
+    def parse_json_object(cls, text: str, *, source: str = "compactor") -> Json:
         text = cls.strip_json_fence(Text.clean(text).strip())  # 去掉 ```json 围栏
         if not text:
-            raise ModelError("compactor returned empty output")
+            raise ModelError(f"{source} returned empty output")
         try:
             data = json.loads(text)
         except json.JSONDecodeError:
             data = repair_json(text, return_objects=True)  # 常规解析失败时用 json_repair 尽力修复
         if isinstance(data, dict):
             return data
-        raise ModelError("compactor returned invalid JSON: " + Tool.compact(text, 200))  # 错误信息带上截断后的原文便于排查
+        raise ModelError(f"{source} returned invalid JSON: " + Tool.compact(text, 200))  # 错误信息带上截断后的原文便于排查
 
     @staticmethod
     def strip_json_fence(text: str) -> str:
@@ -980,7 +1015,7 @@ class ModelClient:
             )  # 真实请求路径:明确报错,列明支持列表
         return [dict(entry) for entry in entries]  # 副本:请求不得改写配置
 
-    def prompt_cache_key(self, provider: ProviderConfig, tools: list[Json] | None) -> str:
+    def prompt_cache_key(self, provider: ProviderConfig, tools: list[Json] | None, *, include_builtin_tools: bool = True) -> str:
         configured = provider.prompt_cache_key
         if configured == "off":
             return ""  # 显式关闭
@@ -996,7 +1031,8 @@ class ModelClient:
             tool_names.append(str(function.get("name") or schema.get("name") or "(unknown)"))
         # 内置工具也属于缓存前缀的一部分:启用搜索会改变主机在 system prompt 之前渲染的工具块,
         # 因此缓存 key 必须随之变化。
-        tool_names.extend(str(entry.get("type") or "(unknown)") for entry in self.builtin_tools(resolved))
+        if include_builtin_tools:
+            tool_names.extend(str(entry.get("type") or "(unknown)") for entry in self.builtin_tools(resolved))
         payload = {
             "api": resolved.api,
             "cwd": self.session.cwd,
@@ -1008,9 +1044,16 @@ class ModelClient:
         digest = hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
         return "yucode-" + digest[:24]  # 固定前缀 + 截断摘要,控制在 key 长度限制内
 
-    def anthropic_request(self, messages: list[Json], tools: list[Json] | None, *, allow_stream: bool = True) -> tuple[Json, list[ToolCall], str]:
+    def anthropic_request(
+        self,
+        messages: list[Json],
+        tools: list[Json] | None,
+        *,
+        allow_stream: bool = True,
+        include_builtin_tools: bool = True,
+    ) -> tuple[Json, list[ToolCall], str]:
         messages = Text.value(messages)
-        params = self.anthropic_params(messages, tools)
+        params = self.anthropic_params(messages, tools, include_builtin_tools=include_builtin_tools)
         client = self.anthropic_client()
         stream = allow_stream and self.session.config.provider.stream and self.on_stream is not None  # 同 chat 路径:三条件齐备才流式
         if stream:
@@ -1107,7 +1150,7 @@ class ModelClient:
         finally:
             self._emit_stream("", "")
 
-    def anthropic_params(self, messages: list[Json], tools: list[Json] | None) -> Json:
+    def anthropic_params(self, messages: list[Json], tools: list[Json] | None, *, include_builtin_tools: bool = True) -> Json:
         provider = self.session.config.provider
         resolved = provider.resolve()
         system_text = "\n\n".join(
@@ -1125,7 +1168,8 @@ class ModelClient:
             "max_tokens": provider.anthropic_output_cap(),  # Anthropic 协议的 max_tokens 必填
         }
         # 思考模式会把 temperature 钉在默认值;发送其他任何值都会被拒绝。
-        if request_tools := [*self.anthropic_tool_schemas(tools or []), *self.builtin_tools(resolved)]:
+        builtin = self.builtin_tools(resolved) if include_builtin_tools else []
+        if request_tools := [*self.anthropic_tool_schemas(tools or []), *builtin]:
             params["tools"] = request_tools
             params["tool_choice"] = {"type": "auto"}  # Anthropic 的 tool_choice 是对象形式
         effort = provider.reasoning_effort()

@@ -255,7 +255,8 @@ class MemoryTool(Tool):
     NAME = "Memory"
     DESCRIPTION = (
         "Persist and recall project-scoped memory across sessions. Save only durable user preferences, feedback, non-derivable project context, and external references; "
-        "never save secrets, current task state, or facts readily derived from code or git."
+        "never save secrets, current task state, or facts readily derived from code or git. Aging memories require verification; "
+        "expired memories remain searchable but are omitted from automatic session context."
     )
     EXAMPLE = (
         'Recall a topic. Example: {"action":"get","id":"feedback-real-database-tests"}',
@@ -279,6 +280,7 @@ class MemoryTool(Tool):
             "type": {"type": "string", "enum": ["user", "feedback", "project", "reference"], "description": "Memory type for remember"},
             "description": {"type": "string", "description": "Specific one-line hook used by future sessions"},
             "content": {"type": "string", "description": "Durable memory body; feedback/project entries should include why and how to apply"},
+            "expires_at": {"type": "string", "description": "Optional ISO 8601 expiration; omit for the memory type's default lifetime"},
             "query": {"type": "string", "description": "Case-insensitive plain-text search over ids, descriptions, and bodies"},
             "limit": {"type": "integer", "minimum": 1, "maximum": cls.MAX_LIMIT, "description": f"Maximum list/search results; default {cls.DEFAULT_LIMIT}"},
         }, ["action"])
@@ -303,7 +305,13 @@ class MemoryTool(Tool):
                 ensure_ascii=False,
             )
         if action == "remember":
-            memory = store.remember(request["id"], request["type"], request["description"], request["content"])
+            memory = store.remember(
+                request["id"],
+                request["type"],
+                request["description"],
+                request["content"],
+                expires_at=request.get("expires_at"),
+            )
             return json.dumps({"ok": True, "memory": self.header(memory)}, ensure_ascii=False)
         return json.dumps({"ok": store.forget(request["id"]), "id": request["id"]}, ensure_ascii=False)
 
@@ -316,7 +324,7 @@ class MemoryTool(Tool):
             "list": {"action", "limit"},
             "search": {"action", "query", "limit"},
             "get": {"action", "id"},
-            "remember": {"action", "id", "type", "description", "content"},
+            "remember": {"action", "id", "type", "description", "content", "expires_at"},
             "forget": {"action", "id"},
         }[action]
         if unexpected := sorted(set(payload) - fields):
@@ -345,7 +353,18 @@ class MemoryTool(Tool):
 
     @staticmethod
     def header(memory: MemoryDocument) -> Json:
-        return {"id": memory.id, "type": memory.type, "description": memory.description}
+        result: Json = {
+            "id": memory.id,
+            "type": memory.type,
+            "description": memory.description,
+            "modified_at": memory.modified_at,
+            "expires_at": memory.expires_at,
+            "age_days": memory.age_days,
+            "freshness": memory.freshness,
+        }
+        if memory.freshness_warning:
+            result["freshness_warning"] = memory.freshness_warning
+        return result
 
 
 class NoteTool(Tool):

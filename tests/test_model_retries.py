@@ -47,6 +47,44 @@ def test_compaction_does_not_publish_internal_model_output(tmp_path, monkeypatch
     assert result["summary"] == "short"
 
 
+def test_memory_consolidation_is_non_streaming_and_disables_all_tools(tmp_path, monkeypatch):
+    s = _session(tmp_path, builtin_tools=({"type": "web_search"},))
+    model = ModelClient(s)
+    factory = _MockClientFactory(
+        [
+            (
+                200,
+                {
+                    "id": "chatcmpl-memory",
+                    "object": "chat.completion",
+                    "created": 1,
+                    "model": "gpt-4",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {"role": "assistant", "content": '{"operations":[]}'},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                },
+            )
+        ]
+    )
+    streamed = []
+    model.on_stream = lambda kind, delta: streamed.append((kind, delta))
+    monkeypatch.setattr(model, "client", factory)
+
+    result = model.consolidate_memory("memory and transcript snapshot")
+
+    body = json.loads(factory.calls[0].content)
+    assert body["stream"] is False
+    assert "tools" not in body
+    assert "tool_choice" not in body
+    assert "maintain yucode's project-scoped long-term memory" in body["messages"][0]["content"]
+    assert streamed == []
+    assert result == {"operations": []}
+
+
 def test_request_retries_then_succeeds(tmp_path, monkeypatch):
     s = _session(tmp_path)
     model = ModelClient(s)
@@ -69,7 +107,7 @@ def test_request_retries_then_succeeds(tmp_path, monkeypatch):
     monkeypatch.setattr(model, "client", factory)
     monkeypatch.setattr(time, "sleep", lambda _seconds: None)
 
-    assistant, calls, content = model.request([{"role": "user", "content": "hi"}], None)
+    _assistant, _calls, content = model.request([{"role": "user", "content": "hi"}], None)
 
     assert content == "ok"
     assert len(factory.calls) == 2

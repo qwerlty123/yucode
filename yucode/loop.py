@@ -51,6 +51,7 @@ from yucode.engine import Agent
 from yucode.hints import Context as HintContext
 from yucode.hints import HintPicker
 from yucode.image import ImageInputs, UserInput
+from yucode.memory import MemoryConsolidationOutcome
 from yucode.model import ModelClient
 from yucode.prompts import LIVE_FOLLOWUP_PREFIX, PREVIOUS_CONTEXT_TRIMMED, SYSTEM_PROMPT
 from yucode.provider_compat import builtin_tools_issue
@@ -359,6 +360,46 @@ Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall, Note, Ask, MCP, S
         if self.tui is not None:
             self.tui.set_running("compacting context" if active else "working")  # 让 TUI 标题反映压缩阶段
 
+    def organize_memory_after_turn(self) -> None:
+        """Run due synchronous memory maintenance without changing the completed turn's result."""
+
+        started = False
+
+        def begin() -> None:
+            nonlocal started
+            started = True
+            if self.tui is not None:
+                self.tui.set_running("organizing memory")
+            else:
+                self.emit("Organizing project memory...")
+                self.status_bar.start()
+
+        try:
+            outcome = self.agent.consolidate_memory(on_start=begin)
+        except KeyboardInterrupt:
+            outcome = MemoryConsolidationOutcome(started, error="cancelled")
+        except Exception as error:  # noqa: BLE001 - maintenance must never replace an already completed answer
+            outcome = MemoryConsolidationOutcome(started, error=Text.clean(str(error))[:500] or error.__class__.__name__)
+        finally:
+            if started:
+                if self.tui is not None:
+                    self.tui.set_dispatching()
+                else:
+                    self.status_bar.stop()
+        if not outcome.attempted:
+            return
+        # The internal request contributes to provider usage. Persist it even when its JSON was
+        # rejected, while the lock mtime remains unchanged so a later turn can retry.
+        self.session.save_snapshot()
+        if outcome.error == "cancelled":
+            self.emit("Memory organization cancelled; the completed answer was kept.")
+        elif outcome.error:
+            self.emit("Memory organization failed; it will retry later: " + outcome.error)
+        elif outcome.upserted or outcome.forgotten:
+            self.emit(f"Memory organized: {outcome.upserted} updated, {outcome.forgotten} removed.")
+        else:
+            self.emit("Memory reviewed: no durable changes.")
+
     @classmethod
     def trim_input_history(cls, path: str) -> None:
         """限制输入历史文件的大小——prompt_toolkit 只会往里追加。
@@ -651,10 +692,12 @@ Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall, Note, Ask, MCP, S
             self.emit("")
             started = time.monotonic()
             malformed_tool_call = False
+            turn_completed = False
             try:
                 self.status_bar.start()
                 try:
                     answer = self.agent.run(user_input)
+                    turn_completed = True
                 except KeyboardInterrupt:
                     self.emit("Cancelled")
                     continue
@@ -674,6 +717,8 @@ Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall, Note, Ask, MCP, S
             if not malformed_tool_call:
                 self.ui.emit_turn_end(started)
             self.session.save_snapshot()
+            if turn_completed:
+                self.organize_memory_after_turn()
 
     def start_session(self) -> None:
         """初始化两个命令循环前端共享的输出与后台服务。"""
@@ -2106,9 +2151,11 @@ class TuiRuntime:
         started = time.monotonic()
         cancelled = False
         malformed_tool_call = False
+        turn_completed = False
         promoted_answer = ""
         try:
             answer = self.loop.agent.run(user_input)
+            turn_completed = True
         except KeyboardInterrupt:
             self.submit_next(self.loop.take_pending_inputs())  # 取消时也要把排队输入交回队列
             answer = ""
@@ -2141,6 +2188,13 @@ class TuiRuntime:
         if not malformed_tool_call:
             self.loop.ui.emit_turn_end(started)
         self.loop.session.save_snapshot()
+        if turn_completed:
+            # reset_turn above made the completed answer render cleanly. Memory organization is
+            # still synchronous main-thread work, so restore busy state while it runs: Ctrl-C
+            # must cancel the organizer without being mistaken for an idle-input cancellation.
+            self.main_busy.set()
+            self.loop.organize_memory_after_turn()
+        self.reset_turn()  # 整理期间的 Ctrl-C 只取消整理；清掉它，不能污染下一条排队输入。
         self.submit_next(self.loop.take_pending_inputs())  # 回合结束:让排队输入继续链式执行
 
     def run_agent_loop(self) -> None:

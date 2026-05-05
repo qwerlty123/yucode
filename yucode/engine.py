@@ -19,6 +19,7 @@ from yucode.base import (
 )
 from yucode.context import ContextManager
 from yucode.image import UserInput
+from yucode.memory import MemoryConsolidationOutcome, MemoryConsolidator
 from yucode.model import ModelClient, PreparedRequest
 from yucode.prompts import (
     INTERRUPT_MARKER,
@@ -64,6 +65,8 @@ class Agent:
         self.model = ModelClient(session)
         self.context = ContextManager(session, self.model)
         self.tools = ToolRunner(session, self.context, input_fn=input_fn, output_fn=output_fn)
+        memory = getattr(session, "memory", None)  # 极简嵌入/测试 Session 可以显式不提供可选 memory Module
+        self.memory_consolidator = MemoryConsolidator(memory) if memory is not None else None
         self.output_fn = output_fn
         self.cancel_requested = threading.Event()  # 跨线程取消信号:只在模型/工具调用之间检查
         # provider 自带搜索(如内置 web search)在上一回合报告出的来源,按出现顺序存放。
@@ -78,6 +81,13 @@ class Agent:
         self.cancel_requested.set()  # 主循环只在请求边界检查该信号,不打断进行中的调用
         self.tools.cancel()  # 终止正在运行的 Bash 等活跃工具
         self.model.cancel()  # 中止 in-flight 的模型请求
+
+    def consolidate_memory(self, *, on_start: Callable[[], None] | None = None) -> MemoryConsolidationOutcome:
+        """Run due project-memory maintenance after a completed main-thread turn."""
+
+        if self.memory_consolidator is None:
+            return MemoryConsolidationOutcome()
+        return self.memory_consolidator.run_if_due(self.session, self.model, on_start=on_start)
 
     def raise_if_cancelled(self) -> None:
         # 把取消翻译成 KeyboardInterrupt,复用 run() 里 Ctrl-C 的同一套收尾路径。

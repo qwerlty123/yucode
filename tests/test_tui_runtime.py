@@ -19,11 +19,12 @@ import yucode.tui as tui_module
 from yucode.base import (
     Config,
     MalformedToolCallError,
-    YucodeError,
     ToolCall,
+    YucodeError,
 )
 from yucode.engine import Agent
 from yucode.loop import CommandLoop, TuiRuntime
+from yucode.memory import MemoryConsolidationOutcome
 from yucode.prompts import LIVE_FOLLOWUP_PREFIX
 from yucode.session import Session, SessionSnapshotStore
 from yucode.tools import CodeIndex
@@ -290,6 +291,51 @@ def test_tui_runtime_emits_answer_when_not_stream_promoted(tmp_path, monkeypatch
     runtime.run_agent_turn("do it")
 
     assert emitted == [("the final answer",)]
+
+
+def test_tui_runtime_organizes_memory_after_publishing_completed_answer(tmp_path, monkeypatch):
+    scenario_session = session(tmp_path)
+    command_loop = CommandLoop(
+        Agent(scenario_session, output_fn=lambda _text: None),
+        input_fn=lambda prompt="": "",
+        output_fn=lambda _text: None,
+    )
+    runtime = TuiRuntime(command_loop)
+    command_loop.tui = TuiApp()
+    events = []
+    command_loop.tui.set_running = lambda label: events.append(("status", label))
+    command_loop.tui.set_dispatching = lambda: events.append(("status", "dispatching"))
+    command_loop.tui.set_idle = lambda: events.append(("status", "idle"))
+    command_loop.ui.emit_answer = lambda text, **_kwargs: events.append(("answer", text))
+    command_loop.emit = lambda text="": events.append(("notice", text))
+    command_loop.agent.run = lambda _text: "the final answer"
+    monkeypatch.setattr(CodeIndex, "update_pending_async", lambda _index: None)
+
+    def consolidate_memory(*, on_start):
+        assert ("answer", "the final answer") in events
+        on_start()
+        return MemoryConsolidationOutcome(True, upserted=1, forgotten=1)
+
+    command_loop.agent.consolidate_memory = consolidate_memory
+
+    runtime.run_agent_turn("do it")
+
+    answer_index = events.index(("answer", "the final answer"))
+    organizing_index = events.index(("status", "organizing memory"))
+    notice_index = events.index(("notice", "Memory organized: 1 updated, 1 removed."))
+    assert answer_index < organizing_index < notice_index
+
+
+def test_tui_runtime_does_not_organize_memory_after_failed_turn(tmp_path, monkeypatch):
+    command_loop = loop(tmp_path)
+    command_loop.tui = TuiApp()
+    command_loop.tui.set_running = lambda _label: None
+    runtime = TuiRuntime(command_loop)
+    command_loop.agent.run = lambda _text: (_ for _ in ()).throw(YucodeError("request failed"))
+    command_loop.agent.consolidate_memory = lambda **_kwargs: pytest.fail("failed turns must not organize memory")
+    monkeypatch.setattr(CodeIndex, "update_pending_async", lambda _index: None)
+
+    runtime.run_agent_turn("do it")
 
 
 def test_automatic_compaction_replaces_working_divider_status(tmp_path):
