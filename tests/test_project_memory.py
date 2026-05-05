@@ -119,6 +119,130 @@ def test_memory_tool_is_project_persistent_and_supports_recall(tmp_path):
     assert MemoryTool(second, [{"action": "remember"}]).needs_confirmation() is False
 
 
+def test_memory_remember_rejects_blind_overwrite_from_a_new_session(tmp_path):
+    config = Config(data_dir=str(tmp_path / "data"))
+    cwd = str(tmp_path / "project")
+    MemoryTool(
+        Session(cwd=cwd, config=config),
+        [
+            {
+                "action": "remember",
+                "id": "user-response-style",
+                "type": "user",
+                "description": "User prefers concise answers",
+                "content": "Keep answers concise.",
+            }
+        ],
+    ).call()
+
+    resumed = Session(cwd=cwd, config=config)  # 新会话:还没读过任何正文
+    with pytest.raises(ToolError, match="freshly read"):
+        MemoryTool(
+            resumed,
+            [
+                {
+                    "action": "remember",
+                    "id": "user-response-style",
+                    "type": "user",
+                    "description": "User prefers examples",
+                    "content": "Give examples when explaining.",
+                }
+            ],
+        ).call()
+
+    recalled = json.loads(MemoryTool(resumed, [{"action": "get", "id": "user-response-style"}]).call())
+    assert recalled["memory"]["content"] == "Keep answers concise."
+
+
+def test_memory_tool_requires_get_before_updating_an_existing_topic(tmp_path):
+    config = Config(data_dir=str(tmp_path / "data"))
+    cwd = str(tmp_path / "project")
+    MemoryTool(
+        Session(cwd=cwd, config=config),
+        [
+            {
+                "action": "remember",
+                "id": "user-response-style",
+                "type": "user",
+                "description": "User prefers concise answers",
+                "content": "Keep final answers concise.",
+            }
+        ],
+    ).call()
+
+    resumed = Session(cwd=cwd, config=config)
+    overwrite = [
+        {
+            "action": "remember",
+            "id": "user-response-style",
+            "type": "user",
+            "description": "User prefers concise answers with examples",
+            "content": "Keep final answers concise. Use short examples to clarify.",
+        }
+    ]
+    with pytest.raises(ToolError, match="freshly read"):
+        MemoryTool(resumed, overwrite).call()
+
+    recalled = json.loads(MemoryTool(resumed, [{"action": "get", "id": "user-response-style"}]).call())
+    assert recalled["memory"]["content"] == "Keep final answers concise."
+
+    updated = json.loads(MemoryTool(resumed, overwrite).call())
+    assert updated["ok"] is True
+    merged = json.loads(MemoryTool(resumed, [{"action": "get", "id": "user-response-style"}]).call())
+    assert merged["memory"]["content"] == "Keep final answers concise. Use short examples to clarify."
+
+    again = json.loads(
+        MemoryTool(
+            resumed,
+            [
+                {
+                    "action": "remember",
+                    "id": "user-response-style",
+                    "type": "user",
+                    "description": "User prefers concise answers with examples and bullets",
+                    "content": "Keep final answers concise. Use short examples to clarify. Prefer bullet lists.",
+                }
+            ],
+        ).call()
+    )
+    assert again["ok"] is True  # 刚写入的正文视为已读,同会话内的后续更新无需重复 get
+
+
+def test_memory_remember_rejects_update_when_topic_changed_since_read(tmp_path):
+    config = Config(data_dir=str(tmp_path / "data"))
+    session = Session(cwd=str(tmp_path / "project"), config=config)
+    MemoryTool(
+        session,
+        [
+            {
+                "action": "remember",
+                "id": "project-release",
+                "type": "project",
+                "description": "Release freeze",
+                "content": "Freeze starts Friday.",
+            }
+        ],
+    ).call()
+    MemoryTool(session, [{"action": "get", "id": "project-release"}]).call()
+
+    timestamp = datetime(2026, 8, 20, 12, tzinfo=UTC).timestamp()  # 模拟其他进程改动了文件
+    os.utime(os.path.join(session.memory.directory, "project-release.md"), (timestamp, timestamp))
+
+    with pytest.raises(ToolError, match="changed since"):
+        MemoryTool(
+            session,
+            [
+                {
+                    "action": "remember",
+                    "id": "project-release",
+                    "type": "project",
+                    "description": "New release policy",
+                    "content": "New policy",
+                }
+            ],
+        ).call()
+
+
 def test_project_memory_exposes_freshness_and_omits_expired_topics_from_automatic_context(tmp_path):
     written_at = datetime(2026, 8, 1, 12, tzinfo=UTC)
     current = [written_at]

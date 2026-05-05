@@ -256,11 +256,13 @@ class MemoryTool(Tool):
     DESCRIPTION = (
         "Persist and recall project-scoped memory across sessions. Save only durable user preferences, feedback, non-derivable project context, and external references; "
         "never save secrets, current task state, or facts readily derived from code or git. Aging memories require verification; "
-        "expired memories remain searchable but are omitted from automatic session context."
+        "expired memories remain searchable but are omitted from automatic session context. "
+        "To update an existing topic you must get it first: remember on an id not freshly read in this session is rejected, "
+        "so merge the new fact into the existing body rather than replacing it."
     )
     EXAMPLE = (
         'Recall a topic. Example: {"action":"get","id":"feedback-real-database-tests"}',
-        'Save or update a topic. Example: {"action":"remember","id":"user-response-style","type":"user","description":"User prefers concise answers","content":"Keep final answers concise."}',
+        'Save or update a topic; update only after get returns its current body and merge rather than replace. Example: {"action":"remember","id":"user-response-style","type":"user","description":"User prefers concise answers with examples","content":"Keep final answers concise. Use short examples to clarify."}',
     )
     STORES_RESULT = False
     MUTATES = True  # 写调用必须与其他变更序列化;读调用共用一个 schema,轻量版不拆第二个工具。
@@ -300,11 +302,19 @@ class MemoryTool(Tool):
         if action == "get":
             memories = store.find(ids=[request["id"]], limit=1)
             memory = memories[0] if memories else None
+            if memory is not None:
+                self.session.memory_reads[memory.id] = memory.mtime_ns  # remember 覆盖已存在 topic 前必须先读到当前正文。
             return json.dumps(
                 {"memory": ({**self.header(memory), "content": memory.content} if memory is not None else None)},
                 ensure_ascii=False,
             )
         if action == "remember":
+            current = store.find(ids=[request["id"]], limit=1)
+            if current and self.session.memory_reads.get(request["id"]) != current[0].mtime_ns:
+                raise ToolError(
+                    f"memory topic {request['id']!r} exists but was not freshly read in this session (or changed since it was read); "
+                    "call Memory get to see its current body and merge the new fact into it rather than replacing it"
+                )
             memory = store.remember(
                 request["id"],
                 request["type"],
@@ -312,6 +322,7 @@ class MemoryTool(Tool):
                 request["content"],
                 expires_at=request.get("expires_at"),
             )
+            self.session.memory_reads[memory.id] = memory.mtime_ns  # 刚写入的正文视为已读;同会话内的后续更新无需重复 get。
             return json.dumps({"ok": True, "memory": self.header(memory)}, ensure_ascii=False)
         return json.dumps({"ok": store.forget(request["id"]), "id": request["id"]}, ensure_ascii=False)
 

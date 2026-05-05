@@ -1026,6 +1026,7 @@ class Session:
     state: AgentState = field(default_factory=AgentState)
     tool_results: dict[str, str] = field(default_factory=dict)
     tool_records: list[ToolResultRecord] = field(default_factory=list)
+    memory_reads: dict[str, int] = field(default_factory=dict)  # Memory 工具本会话内完整读到正文的 topic → 当时的 mtime_ns;瞬时状态,不随快照持久化
     tool_errors: list[ToolErrorRecord] = field(default_factory=list)
     pending_user_inputs: list[QueuedInput] = field(default_factory=list)
     quick_hints: tuple[str, ...] = field(default_factory=tuple)  # 瞬时的下一步输入建议;从不序列化,每轮清空
