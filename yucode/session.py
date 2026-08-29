@@ -39,6 +39,7 @@ if TYPE_CHECKING:
     from yucode.mcp import MCPManager
     from yucode.memory import ProjectMemory
     from yucode.skill import SkillLibrary
+    from yucode.tools import ToolCatalog
 
 
 CONTEXT_LAYOUT_VERSION = 2  # 上下文布局版本:升级时触发一次性的状态检查点迁移
@@ -1040,6 +1041,7 @@ class Session:
     mcp: MCPManager | None = None
     skills: SkillLibrary | None = None
     memory: ProjectMemory | None = field(default=None, repr=False)
+    tool_catalog: ToolCatalog | None = field(default=None, repr=False)
     images: ImageInputs = field(init=False, repr=False)
     _gitignore_cache: dict[str, tuple[int, list[str]]] = field(default_factory=dict)  # (mtime, 规则) 缓存,避免重复解析 .gitignore
     uid: str = ""
@@ -1072,6 +1074,10 @@ class Session:
 
             directory = os.path.join(SessionSnapshotStore.project_dir(self.config.data_dir, self.cwd), "memory")
             self.memory = ProjectMemory(directory)
+        if self.tool_catalog is None:
+            from yucode.tools import TOOL_CATALOG
+
+            self.tool_catalog = TOOL_CATALOG
 
     def store_turn_diff(
         self,

@@ -436,6 +436,11 @@ class RuntimeSettings:
     session_retention_days: int = 7
     # 一个模型批次里最多并发执行的只读工具调用数;1 表示禁用并行。
     max_parallel_tools: int = 4
+    # 子 Agent 调度独立于单个模型批次里的只读工具并发；0 个排队位表示并发槽满时立即拒绝。
+    max_parallel_agents: int = 4
+    max_queued_agents: int = 16
+    max_subagent_steps: int = 80
+    agent_shutdown_grace_seconds: int = 2
     yolo: bool = False
     quick_hints: bool = True
     theme: str = "auto"
@@ -450,6 +455,10 @@ class RuntimeSettings:
             max_steps=max(1, Config.int(runtime, "max_agent_steps", 200)),  # 至少 1 步,防"0 步直接判死"
             max_context_tokens=max(1, Config.int(runtime, "max_context_tokens", DEFAULT_MAX_CONTEXT_TOKENS)),
             max_parallel_tools=max(1, Config.int(runtime, "max_parallel_tools", 4)),
+            max_parallel_agents=max(1, Config.int(runtime, "max_parallel_agents", 4)),
+            max_queued_agents=max(0, Config.int(runtime, "max_queued_agents", 16)),
+            max_subagent_steps=max(1, Config.int(runtime, "max_subagent_steps", 80)),
+            agent_shutdown_grace_seconds=max(0, Config.int(runtime, "agent_shutdown_grace_seconds", 2)),
             session_retention_days=max(0, Config.int(runtime, "session_retention_days", 7)),
             yolo=yolo or Config.bool(runtime, "yolo", False),  # 命令行参数优先于配置文件
             quick_hints=Config.bool(runtime, "quick_hints", True),

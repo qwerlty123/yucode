@@ -26,7 +26,7 @@ from yucode.base import (
 from yucode.context import ContextManager
 from yucode.session import Session, TurnDiff
 from yucode.tools import (
-    TOOL_REGISTRY,
+    TOOL_CATALOG,
     AskSpec,
     AskTool,
     BashTool,
@@ -246,6 +246,7 @@ class ToolRunner:
         self.context = context
         self.input_fn = input_fn
         self.output_fn = output_fn
+        self.catalog = session.tool_catalog or TOOL_CATALOG
         self.live_output: Callable[[str, str], None] | None = None
         self.live_start: Callable[[], None] | None = None
         self.question_fn: Callable[[AskSpec, str], str] | None = None
@@ -360,7 +361,7 @@ class ToolRunner:
         # 只有"既不改状态、也不阻塞等交互输入"的调用才能并发:只读、自动批准、非交互的
         # 工具(Read/Search/Recall/InspectCode、只读 MCP)。Edit 由 EditBatchPlan 串行协调;
         # Bash 会流式输出并改动状态;Ask 会阻塞等待用户输入。
-        tool_class = TOOL_REGISTRY.get(call.name)
+        tool_class = self.catalog.get(call.name)
         if tool_class is None or call.name in ("Edit", "NextHints") or tool_class in (BashTool, JobTool, AskTool) or tool_class.PRODUCES_MODEL_OBSERVATION:
             return False  # 未知/需串行/产生观察的工具一律不并发
         try:
@@ -373,7 +374,7 @@ class ToolRunner:
         # 写入(那些在主线 finalize_outcome 里做)。分支与 run_one 镜像,只是省去确认
         # (parallel_safe 已保证不需要)。
         started = time.monotonic()
-        tool_class = TOOL_REGISTRY.get(call.name)
+        tool_class = self.catalog.get(call.name)
         if tool_class is None:
             return "reject", f"ToolError: unknown tool {call.name}", None, 0.0
         tool = tool_class(self.session, call.args)
@@ -409,7 +410,7 @@ class ToolRunner:
 
     def edit_barrier(self, call: ToolCall) -> bool:
         # 屏障 = 会改动状态或产生观察的非 Edit 工具:它们之前不能与 Edit 混在同一规划段里。
-        tool_class = TOOL_REGISTRY.get(call.name)
+        tool_class = self.catalog.get(call.name)
         return call.name != "Edit" and (tool_class is None or tool_class.MUTATES or tool_class.PRODUCES_MODEL_OBSERVATION)
 
     def run_one(
@@ -427,7 +428,7 @@ class ToolRunner:
 
         顺序是有意义的:展示行在确认之前就构建好,这样被拒绝的调用也显示它请求了什么;
         Bash 的实时预览只在批准之后才开始,未获用户同意的调用不会流出任何内容。"""
-        tool_class = TOOL_REGISTRY.get(call.name)
+        tool_class = self.catalog.get(call.name)
         if tool_class is None:
             return (
                 "failed",
@@ -512,7 +513,7 @@ class ToolRunner:
         d: ToolDisplay | None = None,
     ) -> str:
         d = d or ToolDisplay()
-        tool_class = TOOL_REGISTRY.get(call.name)
+        tool_class = self.catalog.get(call.name)
         # 成功且工具声明 STORES_RESULT(或未知)才存结果并拿到 key;失败或未声明一律不存。
         key = self.session.store_tool_result(call.name, call.args, output) if not failed and store and (tool_class is None or tool_class.STORES_RESULT) else ""
         if failed:
@@ -629,7 +630,7 @@ class ToolRunner:
 
     def log_root(self, display: str, role: LogRole = LogRole.TOOL, batch_suffix: str = "", call: ToolCall | None = None) -> LogLine:
         name, _, args = display.partition(" ")
-        tool_class = TOOL_REGISTRY.get(name)
+        tool_class = self.catalog.get(name)
         syntax = ""
         if tool_class is not None:
             syntax = tool_class.log_lexer(call.args) if call is not None else tool_class.LOG_LEXER
@@ -724,7 +725,7 @@ class ToolRunner:
         return text + (("  " + suffix) if suffix else "")
 
     def short_call(self, call: ToolCall, args: list[str] | None = None) -> str:
-        tool_class = TOOL_REGISTRY.get(call.name)
+        tool_class = self.catalog.get(call.name)
         if args is None:
             try:
                 # 工具自带 short_args 用它(如 Bash 只显示命令首段),否则压缩参数为单行。

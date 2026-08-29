@@ -63,17 +63,11 @@ class Tool:
     def resolved_schemas(session: Session) -> list[Json]:
         """返回该会话与供应商可用的工具 schema。"""
 
-        from yucode.tools import TOOL_REGISTRY, MCPTool, NextHintsTool, SkillTool  # 局部导入:注册表构建在所有工具之上
+        from yucode.tools import TOOL_CATALOG
 
-        strict = session.config.provider.resolve().strict_tools_active
-        # 可选工具族在具备可用的会话状态之前,不进入模型前缀。
-        has_skills = bool(session.skills and session.skills.skills)
-        has_mcp = bool(session.mcp and (session.mcp.tools or session.mcp.resources))
-        return [
-            tool.schema(strict)
-            for tool in TOOL_REGISTRY.values()
-            if (tool is not SkillTool or has_skills) and (tool is not MCPTool or has_mcp) and (tool is not NextHintsTool or session.settings.quick_hints)
-        ]
+        # 极简测试 Session 可能没有 tool_catalog；正式 Session 会在初始化时绑定目录。
+        catalog = getattr(session, "tool_catalog", None) or TOOL_CATALOG
+        return catalog.resolved_schemas(session)
 
     @staticmethod
     def _strictifiable(schema: object) -> bool:

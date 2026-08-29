@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from yucode.tools.ask import AskSpec, AskTool
 from yucode.tools.base import Tool
+from yucode.tools.catalog import ToolCatalog
 from yucode.tools.files import Edit, EditApplyResult, EditTool, ReadTool, ViewImageTool
 from yucode.tools.mcp import MCPTool
 from yucode.tools.memory import MemoryTool, NextHintsTool, NoteTool, RecallContextTool, RecallTool
@@ -29,9 +30,11 @@ TOOLS: tuple[type[Tool], ...] = (
     AskTool,
 )
 TOOL_REGISTRY: dict[str, type[Tool]] = {tool.NAME: tool for tool in TOOLS}
+TOOL_CATALOG = ToolCatalog(TOOLS)
 
 __all__ = [
     "TOOLS",
+    "TOOL_CATALOG",
     "TOOL_REGISTRY",
     "AskSpec",
     "AskTool",
@@ -52,5 +55,6 @@ __all__ = [
     "SearchTool",
     "SkillTool",
     "Tool",
+    "ToolCatalog",
     "ViewImageTool",
 ]
