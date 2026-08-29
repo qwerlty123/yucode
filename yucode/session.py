@@ -1053,11 +1053,13 @@ class Session:
     mcp: MCPManager | None = None
     skills: SkillLibrary | None = None
     memory: ProjectMemory | None = field(default=None, repr=False)
+    memory_context_snapshot: str | None = field(default=None, repr=False)
     tool_catalog: ToolCatalog | None = field(default=None, repr=False)
     subagents: SubagentRuntime | None = field(default=None, repr=False)
     subagent_task_id: str = field(default="", repr=False)
     subagent_interaction_available: bool = field(default=False, repr=False)
     subagent_interaction_handler: Callable[[Json], str] | None = field(default=None, repr=False)
+    cancellation_event: threading.Event | None = field(default=None, repr=False)
     authorization_settings: RuntimeSettings | None = field(default=None, repr=False)
     workspace_lease: WorkspaceLease | None = field(default=None, repr=False)
     workspace_owner: str = field(default="root", repr=False)

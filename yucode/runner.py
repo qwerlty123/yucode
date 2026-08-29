@@ -248,7 +248,8 @@ class ToolRunner:
         self.context = context
         self.input_fn = input_fn
         self.output_fn = output_fn
-        self.catalog = getattr(session, "tool_catalog", None) or TOOL_CATALOG
+        catalog = getattr(session, "tool_catalog", None)
+        self.catalog = TOOL_CATALOG if catalog is None else catalog
         self.live_output: Callable[[str, str], None] | None = None
         self.live_start: Callable[[], None] | None = None
         self.question_fn: Callable[[AskSpec, str], str] | None = None
@@ -265,7 +266,13 @@ class ToolRunner:
         runtime = getattr(self.session, "subagents", None)
         if runtime is not None:
             for task_id in task_ids:
-                runtime.stop(task_id)
+                try:
+                    task = runtime.get(task_id)
+                except ToolError:
+                    continue
+                # Ctrl+B 可能恰好在取消前把工具等待转入后台；这时它已不属于根回合的取消边界。
+                if task.status in runtime.ACTIVE and not task.run_in_background:
+                    runtime.stop(task_id)
 
     def call_tool(self, tool: Tool, planned_edit: EditBatchPlan.PlannedEdit | None = None) -> str:
         def execute() -> str:

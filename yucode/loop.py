@@ -76,6 +76,10 @@ SET_HANDLERS: dict[str, SetHandler] = {
     "runtime.max_agent_steps": ("settings", "max_steps", lambda v: max(1, int(v))),
     "runtime.max_context_tokens": ("settings", "max_context_tokens", lambda v: max(1, int(v))),
     "runtime.max_parallel_tools": ("settings", "max_parallel_tools", lambda v: max(1, int(v))),
+    "runtime.max_parallel_agents": ("settings", "max_parallel_agents", lambda v: max(1, int(v))),
+    "runtime.max_queued_agents": ("settings", "max_queued_agents", lambda v: max(0, int(v))),
+    "runtime.max_subagent_steps": ("settings", "max_subagent_steps", lambda v: max(1, int(v))),
+    "runtime.agent_shutdown_grace_seconds": ("settings", "agent_shutdown_grace_seconds", lambda v: max(0, int(v))),
     "runtime.shell_timeout": ("settings", "shell_timeout", lambda v: max(1, int(v))),
     "runtime.bash_wait_timeout": ("settings", "bash_wait_timeout", lambda v: max(0, int(v))),
 }
@@ -104,6 +108,8 @@ class CommandCompleter(Completer):
         mcp_connected_servers: Callable[[], tuple[str, ...]] = tuple,
         mcp_tools: Callable[[str], tuple[str, ...]] = lambda _server: (),
         skills: Callable[[], tuple[str, ...]] = tuple,
+        agent_profiles: Callable[[], tuple[str, ...]] = tuple,
+        agent_tasks: Callable[[], tuple[str, ...]] = tuple,
     ):
         self.providers = providers
         self.models = models
@@ -111,6 +117,8 @@ class CommandCompleter(Completer):
         self.mcp_connected_servers = mcp_connected_servers
         self.mcp_tools = mcp_tools
         self.skills = skills
+        self.agent_profiles = agent_profiles
+        self.agent_tasks = agent_tasks
 
     def get_completions(self, document, complete_event):
         del complete_event
@@ -150,6 +158,19 @@ class CommandCompleter(Completer):
                 return
             if sub == "tools":
                 yield from self.matches(self.mcp_connected_servers(), value)
+                return
+        if text.startswith("/agents "):
+            tail = text[len("/agents ") :]
+            if " " not in tail:
+                yield from self.matches(("run", "list", "show", "wait", "steer", "stop", "resume", "close", "clean", "reload"), tail)
+                return
+            sub, _, value = tail.partition(" ")
+            if sub == "run" and " " not in value:
+                yield from self.matches(self.agent_profiles(), value)
+                return
+            if sub in {"show", "wait", "steer", "stop", "resume", "close", "clean"} and " " not in value:
+                choices = (*self.agent_tasks(), "all") if sub == "stop" else self.agent_tasks()
+                yield from self.matches(choices, value)
                 return
 
         at_match = CommandCompleter.MCP_MENTION_RE.search(text)
@@ -200,7 +221,7 @@ class CommandLoop:
     # 斜杠命令 -> 处理方法名;"/exit"、"/quit" 不在此表,由 command() 单独处理。
     COMMAND_HANDLERS: ClassVar[dict[str, str]] = {
         "/help": "help", "/status": "status", "/ps": "ps_command", "/diff": "diff_command",
-        "/skills": "skills_command", "/config": "config",
+        "/skills": "skills_command", "/agents": "agents_command", "/config": "config",
         "/compact": "compact", "/index": "index", "/provider": "provider", "/model": "model",
         "/reason": "reason", "/effort": "reason", "/api": "api", "/set": "set_value", "/yolo": "yolo", "/strict": "strict", "/hints": "hints",
         "/mcp": "mcp_command", "/resend": "resend_command", "/name": "name_command", "/sessions": "sessions_command", "/resume": "sessions_command",
@@ -208,9 +229,8 @@ class CommandLoop:
     COMMANDS: ClassVar[tuple[str, ...]] = tuple(COMMAND_HANDLERS) + ("/exit", "/quit")
     # fmt: on
 
-    # agent 工作时允许从跟进输入框运行的命令:只读视图外加 /yolo——
-    # /yolo 只是翻转一个原子标志,agent 在下一次审批时读取即可,不会改变在飞回合。
-    QUEUE_RUN_COMMANDS: ClassVar[frozenset[str]] = frozenset({"/help", "/status", "/skills", "/ps", "/mcp", "/diff", "/yolo", "/hints", "/resend"})
+    # agent 工作时允许从跟进输入框运行的命令:只读视图、实时授权以及显式任务控制。
+    QUEUE_RUN_COMMANDS: ClassVar[frozenset[str]] = frozenset({"/help", "/status", "/skills", "/agents", "/ps", "/mcp", "/diff", "/yolo", "/hints", "/resend"})
     MODEL_CONFIGURED_LABEL = "---- Configured models ----"
     MODEL_DISCOVERED_LABEL = "---- Discovered models ----"
     MODEL_LABELS = frozenset((MODEL_CONFIGURED_LABEL, MODEL_DISCOVERED_LABEL))
@@ -229,6 +249,7 @@ class CommandLoop:
 - `/ps` — Show active background jobs.
 - `/diff` — Show latest edits and overall session diff.
 - `/skills` — List installed skills (load with `Skill(name)` or reference inline with `$name`).
+- `/agents` — Manage sub-agent tasks and profile library.
 - `/config` — Show active config.
 - `/compact` — Compact context now.
 - `/name [TEXT]` — Name this session for later, or show the current name.
@@ -260,7 +281,7 @@ class CommandLoop:
 
 ### Tools
 
-Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall, Note, Ask, MCP, Skill.
+Agent, AgentTask, Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall, Note, Ask, MCP, Skill.
 
 `Skill(name)` loads a skill's full instructions on demand (see the SKILLS section / `$skill`).
 """
@@ -322,6 +343,7 @@ Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall, Note, Ask, MCP, S
         self.resume_request = ""
         self.background_output_lock = threading.Lock()
         self.background_output_open = True
+        self.subagent_interaction_lock = threading.Lock()  # 多个前台子任务同时提问时，按请求顺序逐个占用交互界面。
         self.interactive_input = input_fn is input and sys.stdin.isatty()  # 交互终端才走全 TUI;注入输入(如测试)走简单 REPL
         # 全 TUI 外壳激活期间由 run_tui() 设置;tool_input 经由它路由,让审批提示落在
         # 用户正在输入的同一个输入控件里。
@@ -344,6 +366,12 @@ Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall, Note, Ask, MCP, S
             ),
             mcp_tools=lambda server: tuple(tool.name for tool in self.session.mcp.tools.get(server, [])) if self.session.mcp else (),
             skills=lambda: tuple(skill.name for skill in self.session.skills.all()) if self.session.skills else (),
+            agent_profiles=lambda: (
+                tuple(profile.name for profile in self.session.subagents.profiles.all())
+                if self.session.subagents is not None
+                else ("general-purpose", "explore", "plan")
+            ),
+            agent_tasks=lambda: tuple(task.task_id for task in self.session.subagents.list()) if self.session.subagents is not None else (),
         )
         # —— 把 agent 的各路输出/输入回调接到本循环的渲染路径上 ——
         self.agent.output_fn = self.agent_output  # 最终答案:去重后经 agent_output 输出
@@ -360,21 +388,39 @@ Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall, Note, Ask, MCP, S
     def subagent_interaction(self, request: Json) -> str:
         """在前台子 Agent 阻塞期间把持久化请求接到根 TUI 的交互控件。"""
 
-        if request.get("kind") == "ask":
-            choices = request.get("choices")
-            previews = request.get("previews")
-            recommended = request.get("recommended")
-            spec = AskSpec(
-                str(request.get("question") or ""),
-                [str(item) for item in choices] if isinstance(choices, list) else None,
-                [str(item) for item in previews] if isinstance(previews, list) else None,
-                int(recommended) if isinstance(recommended, int) and not isinstance(recommended, bool) else None,
-            )
-            return self.question_interaction(spec, str(request.get("position") or ""))
-        preview = str(request.get("preview") or "").strip()
-        if preview:
-            self.emit(preview)
-        return self.tool_input(LogBlock.prefix(2, LogEdge.CONTINUE) + "[Y/n or reason] ")
+        fallback = DISMISSED if request.get("kind") == "ask" else "n"
+        with self.subagent_interaction_lock:
+            runtime = self.session.subagents
+            if runtime is None:
+                return fallback
+            try:
+                task = runtime.get(str(request.get("task_id") or ""))
+            except ToolError:
+                return fallback
+            pending = task.pending_interaction
+            # 请求可能在等待前一个模态时被 stop/close；取得交互权后必须重新校验，不能再弹过期问题。
+            if (
+                task.status != "waiting_interaction"
+                or pending.get("status") != "pending"
+                or pending.get("request_id") != request.get("request_id")
+                or pending.get("digest") != request.get("digest")
+            ):
+                return fallback
+            if request.get("kind") == "ask":
+                choices = request.get("choices")
+                previews = request.get("previews")
+                recommended = request.get("recommended")
+                spec = AskSpec(
+                    str(request.get("question") or ""),
+                    [str(item) for item in choices] if isinstance(choices, list) else None,
+                    [str(item) for item in previews] if isinstance(previews, list) else None,
+                    int(recommended) if isinstance(recommended, int) and not isinstance(recommended, bool) else None,
+                )
+                return self.question_interaction(spec, str(request.get("position") or ""))
+            preview = str(request.get("preview") or "").strip()
+            if preview:
+                self.emit(preview)
+            return self.tool_input(LogBlock.prefix(2, LogEdge.CONTINUE) + "[Y/n or reason] ")
 
     def automatic_compaction_status(self, active: bool) -> None:
         """把自动上下文压缩(compaction)显示为当前回合的一个独立阶段。"""
@@ -577,8 +623,32 @@ Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall, Note, Ask, MCP, S
             fragments.extend([("ansibrightblack", line), ("", "\n")])
         if lines:
             fragments.append(("", "\n"))
+        agent_lines = self.subagent_activity_lines()
+        for line in agent_lines:
+            fragments.extend([("ansibrightblack", line), ("", "\n")])
+        if agent_lines:
+            fragments.append(("", "\n"))
         fragments.extend(waiting)
         return fragments
+
+    def subagent_activity_lines(self) -> list[str]:
+        runtime = self.session.subagents
+        if runtime is None:
+            return []
+        runtime.drain_events()  # 事件只用于请求重绘；展示始终读取锁内一致的任务快照
+        tasks = runtime.list()
+        active = [task for task in tasks if task.status in runtime.ACTIVE]
+        completions = [task for task in tasks if task.terminal and task.delivery_state in {"pending", "delivered"}]
+        visible = [*active, *completions]
+        width = max(20, shutil.get_terminal_size((120, 20)).columns - 4)
+        lines = []
+        for task in visible[:4]:
+            badge = " ?" if task.status == "waiting_interaction" else ""
+            activity = " ".join((task.partial_result or task.result or task.error or task.description).split())
+            lines.append(Text.clip_width(f"agent {task.task_id} · {task.status}{badge} · {task.profile} · {activity}", width))
+        if len(visible) > 4:
+            lines.append(f"agent … {len(visible) - 4} more active or awaiting delivery")
+        return lines
 
     def model_stream_fragments(self) -> StyleAndTextTuples:
         with self.model_stream_lock:
@@ -699,6 +769,7 @@ Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall, Note, Ask, MCP, S
             except EOFError:
                 # Ctrl-D/EOF:保存会话并打印恢复提示,正常退出。
                 self.emit(TurnBox.SEPARATOR)
+                self.shutdown_subagents()
                 self.save_and_emit_resume()
                 return 0
             except KeyboardInterrupt:
@@ -1124,6 +1195,7 @@ Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall, Note, Ask, MCP, S
 
     def command(self, text: str) -> tuple[bool, bool]:
         if text in {"/exit", "/quit", "exit", "quit"}:
+            self.shutdown_subagents()
             self.save_and_emit_resume()
             return True, True  # (已处理, 退出)
         if not text.startswith("/"):
@@ -1137,10 +1209,16 @@ Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall, Note, Ask, MCP, S
             if name == "/status":
                 self.ui.emit_answer(output, rule=False)
             else:
-                (self.ui.emit_answer if name in {"/help", "/ps", "/mcp", "/skills", "/diff"} else self.emit)(output)
+                (self.ui.emit_answer if name in {"/help", "/ps", "/mcp", "/skills", "/agents", "/diff"} else self.emit)(output)
         # 请求切换会话的 handler 会像 /exit 一样结束本次运行;`main` 会围绕它
         # 指定的 session 启动下一个。
         return True, bool(self.resume_request)
+
+    def shutdown_subagents(self) -> None:
+        """停止全部子任务；运行时自身保证有界等待、资源回收和终态落盘。"""
+
+        if self.session.subagents is not None:
+            self.session.subagents.close()
 
     def resend_command(self, _args: str) -> str | None:
         """重发在途的模型请求。只在运行中的排队输入区可用:回合进行中输入它,
@@ -1506,6 +1584,321 @@ Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall, Note, Ask, MCP, S
         )
         return "\n".join([f"### Skills · {len(skills)}", "", "Load with `Skill(name)` or reference inline with `$name`.", "", table])
 
+    def agents_command(self, args: str) -> str | None:
+        """解析 `/agents` 命令；所有状态变更仍通过 SubagentRuntime 单一入口。"""
+
+        from yucode.subagent import SubagentRuntime
+
+        runtime = self.session.subagents
+        if runtime is None:
+            runtime = SubagentRuntime(self.session)
+        text = args.strip()
+        if not text:
+            if self.tui is not None and self.interactive_input:
+                self.agents_manager(runtime)
+                return None
+            return self.agents_listing(runtime)
+        try:
+            parts = shlex.split(text)
+        except ValueError as error:
+            return "Error: " + str(error)
+        if not parts:
+            return self.agents_listing(runtime)
+        action, rest = parts[0].lower(), parts[1:]
+        try:
+            if action == "run":
+                return self.agents_run(runtime, rest)
+            if action == "list":
+                return self.agents_listing(runtime) if not rest else "Usage: /agents list"
+            if action == "show" and len(rest) == 1:
+                return json.dumps(runtime.details(rest[0]), ensure_ascii=False, sort_keys=True)
+            if action == "wait" and 1 <= len(rest) <= 2:
+                timeout = float(rest[1]) if len(rest) == 2 else 120.0
+                return json.dumps(runtime.wait_change(rest[0], timeout).to_json(), ensure_ascii=False, sort_keys=True)
+            if action in {"steer", "resume"}:
+                if "--" not in rest:
+                    return f"Usage: /agents {action} <task-id> -- <message>"
+                marker = rest.index("--")
+                if marker != 1 or not rest[marker + 1 :]:
+                    return f"Usage: /agents {action} <task-id> -- <message>"
+                message = " ".join(rest[marker + 1 :])
+                task = runtime.steer(rest[0], message) if action == "steer" else runtime.resume(rest[0], message)
+                return json.dumps(task.to_json(), ensure_ascii=False, sort_keys=True)
+            if action == "stop" and len(rest) == 1:
+                if rest[0] == "all":
+                    return json.dumps({"tasks": [task.to_json() for task in runtime.stop_all()]}, ensure_ascii=False, sort_keys=True)
+                return json.dumps(runtime.stop(rest[0]).to_json(), ensure_ascii=False, sort_keys=True)
+            if action == "close" and len(rest) == 1:
+                return json.dumps(runtime.close_task(rest[0]).to_json(), ensure_ascii=False, sort_keys=True)
+            if action == "clean" and len(rest) == 1:
+                if not self.interactive_input:
+                    return "/agents clean 需要交互确认，非交互模式不会删除 worktree"
+                target = runtime.get(rest[0]).workspace
+                answer = (
+                    self.tool_input(f"Delete retained worktree {target.get('path') or '(unknown)'} and branch {target.get('branch') or '(unknown)'}? [y/N] ")
+                    .strip()
+                    .lower()
+                )
+                if answer not in {"y", "yes"}:
+                    return "Cancelled"
+                return json.dumps(runtime.clean_task(rest[0], confirmed=True).to_json(), ensure_ascii=False, sort_keys=True)
+            if action == "reload" and not rest:
+                library = runtime.reload_profiles()
+                return f"Reloaded {len(library.all())} Agent profiles"
+        except (ToolError, ValueError) as error:
+            return "Error: " + str(error)
+        return self.agents_usage()
+
+    def agents_run(self, runtime, parts: list[str]) -> str:
+        from yucode.subagent import AgentSpec
+
+        if not parts or "--" not in parts:
+            return self.agents_usage(run_only=True)
+        marker = parts.index("--")
+        options, prompt_parts = parts[:marker], parts[marker + 1 :]
+        if not options or not prompt_parts:
+            return self.agents_usage(run_only=True)
+        profile, flags = options[0], options[1:]
+        background: bool | None = None
+        isolation: str | None = None
+        context: str | None = None
+        model: str | None = None
+        index = 0
+        while index < len(flags):
+            flag = flags[index]
+            if flag == "--background":
+                background = True
+            elif flag in {"--worktree", "--shared"}:
+                isolation = flag.removeprefix("--")
+            elif flag in {"--fresh", "--fork"}:
+                context = flag.removeprefix("--")
+            elif flag == "--model" and index + 1 < len(flags):
+                index += 1
+                model = flags[index]
+            else:
+                return self.agents_usage(run_only=True)
+            index += 1
+        prompt = " ".join(prompt_parts).strip()
+        description = Text.clip_width(prompt.splitlines()[0], 80)
+        task = runtime.spawn(AgentSpec(description, prompt, profile, model, background, isolation, context))
+        return json.dumps(task.to_json(), ensure_ascii=False, sort_keys=True)
+
+    @staticmethod
+    def agents_usage(*, run_only: bool = False) -> str:
+        run = "/agents run <profile> [--background] [--worktree|--shared] [--fresh|--fork] [--model MODEL] -- <prompt>"
+        if run_only:
+            return "Usage: " + run
+        return "\n".join(
+            [
+                "Usage:",
+                "  " + run,
+                "  /agents list | show <id> | wait <id> [seconds]",
+                "  /agents steer <id> -- <message> | stop <id|all> | resume <id> -- <message>",
+                "  /agents close <id> | clean <id> | reload",
+            ]
+        )
+
+    @staticmethod
+    def agents_listing(runtime) -> str:
+        tasks = runtime.list()
+        profiles = runtime.profiles.all()
+        rows = []
+        for task in tasks:
+            tokens = task.usage.get("total_tokens", 0)
+            activity = " ".join((task.partial_result or task.error or task.result).split())
+            rows.append((task.task_id, task.status, task.profile, f"{task.elapsed_ms / 1000:.1f}s", tokens, Text.clip_width(activity, 50)))
+        task_table = markdown_table(["task", "status", "profile", "elapsed", "tokens", "activity"], rows) if rows else "No sub-agent tasks."
+        profile_rows = [
+            (profile.name, profile.source, "valid" if profile.valid else "invalid", profile.description or "(no description)") for profile in profiles
+        ]
+        return "\n".join(
+            [
+                f"### Agent tasks · {len(tasks)}",
+                "",
+                task_table,
+                "",
+                f"### Agent library · {len(profiles)}",
+                "",
+                markdown_table(["profile", "source", "status", "description"], profile_rows),
+            ]
+        )
+
+    def agents_manager(self, runtime) -> None:
+        """Tasks/Library 双标签模态；每次动作关闭模态，处理后再打开最新快照。"""
+
+        if self.tui is None:
+            return
+        tab = 0
+        selected = [0, 0]
+
+        def snapshots():
+            return runtime.list(), runtime.profiles.all()
+
+        def fragments() -> StyleAndTextTuples:
+            tasks, profiles = snapshots()
+            items = tasks if tab == 0 else profiles
+            selected[tab] = min(selected[tab], max(0, len(items) - 1))
+            width = max(24, shutil.get_terminal_size((100, 24)).columns - 4)
+            visible = max(1, shutil.get_terminal_size((100, 24)).lines - 18)
+            parts: StyleAndTextTuples = [("", "\n"), *self.ui.tab_segments(("Tasks", "Library"), tab), ("", "\n\n")]
+            if not items:
+                parts.append(("class:choice.disabled", "  No tasks\n" if tab == 0 else "  No profiles\n"))
+            start = min(max(0, selected[tab] - visible + 1), max(0, len(items) - visible))
+            if start:
+                parts.append(("class:choice.disabled", f"  … {start} above\n"))
+            end = min(len(items), start + visible)
+            for index in range(start, end):
+                item = items[index]
+                marker = "> " if index == selected[tab] else "  "
+                style = "ansicyan" if index == selected[tab] else "class:choice.disabled"
+                if tab == 0:
+                    badge = " ?" if item.status == "waiting_interaction" else ""
+                    tokens = item.usage.get("total_tokens", 0)
+                    text = f"{item.task_id}  {item.status}{badge}  {item.profile}  {item.elapsed_ms / 1000:.1f}s  {tokens}t"
+                else:
+                    validity = "valid" if item.valid else "invalid"
+                    text = f"{item.name}  {item.source}  {validity}  {item.description}"
+                parts.extend([(style, marker + Text.clip_width(text, width - 2)), ("", "\n")])
+            if end < len(items):
+                parts.append(("class:choice.disabled", f"  … {len(items) - end} below\n"))
+            if items:
+                item = items[selected[tab]]
+                parts.append(("", "\n"))
+                if tab == 0:
+                    detail = runtime.details(item.task_id)
+                    rows = [
+                        f"description  {detail['description']}",
+                        f"activity     {' '.join(str(detail['current_activity'] or '(none)').split())}",
+                        f"result       {' '.join(str(detail['result'] or detail['error'] or '(pending)').split())}",
+                        f"workspace    {detail['workspace'].get('path') or detail['workspace'].get('mode') or '(pending)'}",
+                    ]
+                    if detail.get("pending_interaction", {}).get("status") == "pending":
+                        interaction = str(detail["pending_interaction"].get("question") or detail["pending_interaction"].get("tool_name"))
+                        rows.append("interaction  " + " ".join(interaction.split()))
+                else:
+                    rows = [
+                        f"tools   {', '.join(item.tools)}",
+                        f"model   {item.model}",
+                        f"mode    {'background' if item.background else 'foreground'} · {item.isolation} · {item.context}",
+                        f"path    {item.path or '(builtin, read-only)'}",
+                        *(f"error   {error}" for error in item.errors),
+                    ]
+                parts.extend(("ansibrightblack", "  " + Text.clip_width(row, width - 2) + "\n") for row in rows)
+            hint = (
+                "↑/↓ move · ←/→/Tab switch · Enter answer · g steer · u resume · s stop · d clean · x close · r refresh · Esc/q close"
+                if tab == 0
+                else "↑/↓ move · ←/→/Tab switch · n new · e edit · c copy · d delete · r reload · Esc/q close"
+            )
+            parts.append(("class:choice.disabled", "\n  " + Text.clip_width(hint, width - 2) + "\n"))
+            return parts
+
+        def key_handler(key: str, data: str) -> Any:
+            nonlocal tab
+            key = data if key == "any" and data else key
+            tasks, profiles = snapshots()
+            items = tasks if tab == 0 else profiles
+            if key in {"q", "escape", "c-c"}:
+                return None
+            if key in {"tab", "right", "l", "left", "h"}:
+                tab = (tab + (1 if key in {"tab", "right", "l"} else -1)) % 2
+            elif key in {"down", "j", "up", "k"} and items:
+                selected[tab] = (selected[tab] + (1 if key in {"down", "j"} else -1)) % len(items)
+            elif key == "r":
+                return ("reload",)
+            elif tab == 0 and items:
+                task = items[selected[tab]]
+                if key == "enter" and task.pending_interaction.get("status") == "pending":
+                    return ("respond", task.task_id)
+                if key == "s" and task.status in runtime.ACTIVE:
+                    return ("stop", task.task_id)
+                if key == "g" and task.status in {"running", "waiting_interaction"}:
+                    return ("steer", task.task_id)
+                if key == "u" and task.status not in runtime.ACTIVE:
+                    return ("resume", task.task_id)
+                if key == "x" and task.status not in runtime.ACTIVE:
+                    return ("close", task.task_id)
+                if key == "d" and task.status not in runtime.ACTIVE and task.workspace.get("cleanup_state") in {"retained", "cleanup_failed"}:
+                    return ("clean", task.task_id)
+            elif tab == 1:
+                if key == "n":
+                    return ("create",)
+                if items:
+                    profile = items[selected[tab]]
+                    if key == "e":
+                        return ("edit", profile.name)
+                    if key == "c":
+                        return ("copy", profile.name)
+                    if key == "d":
+                        return ("delete", profile.name)
+            return TUI_MODAL_PENDING
+
+        while True:
+            action = self.tui.show_modal(fragments, key_handler)
+            if not isinstance(action, tuple) or not action:
+                return
+            kind = action[0]
+            try:
+                if kind == "reload":
+                    runtime.reload_profiles()
+                elif kind == "stop":
+                    runtime.stop(action[1])
+                elif kind == "steer":
+                    message = self.tui.request_input("Steer message: ").strip()
+                    if message:
+                        runtime.steer(action[1], message)
+                elif kind == "resume":
+                    message = self.tui.request_input("Resume message: ").strip()
+                    if message:
+                        runtime.resume(action[1], message)
+                elif kind == "close":
+                    runtime.close_task(action[1])
+                elif kind == "clean":
+                    task = runtime.get(action[1])
+                    answer = (
+                        self.tool_input(
+                            f"Delete retained worktree {task.workspace.get('path') or '(unknown)'} and branch {task.workspace.get('branch') or '(unknown)'}? [y/N] "
+                        )
+                        .strip()
+                        .lower()
+                    )
+                    if answer in {"y", "yes"}:
+                        runtime.clean_task(action[1], confirmed=True)
+                elif kind == "respond":
+                    task = runtime.get(action[1])
+                    request = task.pending_interaction
+                    response = self.subagent_interaction(request)
+                    runtime.respond_interaction(task.task_id, str(request["request_id"]), str(request["digest"]), response)
+                elif kind == "create":
+                    name = self.tui.request_input("Agent name: ").strip()
+                    if name:
+                        profile = runtime.profiles.create(name, source="project")
+                        self.tui.edit_path_in_editor(profile.path)
+                        runtime.reload_profiles()
+                elif kind == "copy":
+                    name = self.tui.request_input("Copy as: ").strip()
+                    if name:
+                        profile = runtime.profiles.copy(action[1], name, source="project")
+                        self.tui.edit_path_in_editor(profile.path)
+                        runtime.reload_profiles()
+                elif kind == "edit":
+                    profile = runtime.profiles.get(action[1])
+                    if profile is None or not profile.path:
+                        self.emit("Built-in Agent profiles are read-only; copy it before editing.")
+                    else:
+                        self.tui.edit_path_in_editor(profile.path)
+                        runtime.reload_profiles()
+                elif kind == "delete":
+                    profile = runtime.profiles.get(action[1])
+                    if profile is None or profile.source == "builtin":
+                        self.emit("Built-in Agent profiles are read-only.")
+                    else:
+                        answer = self.tool_input(f"Delete Agent profile {profile.name}? [y/N] ").strip().lower()
+                        if answer in {"y", "yes"}:
+                            runtime.profiles.delete(profile.name)
+                            runtime.reload_profiles()
+            except ToolError as error:
+                self.emit("Error: " + str(error))
+
     def ps_command(self, args: str) -> str:
         if args.strip():
             return "Usage: /ps"
@@ -1738,6 +2131,10 @@ Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall, Note, Ask, MCP, S
                 f"runtime.max_agent_steps: {self.session.settings.max_steps}",
                 f"runtime.max_context_tokens: {self.session.settings.max_context_tokens}",
                 f"runtime.max_parallel_tools: {self.session.settings.max_parallel_tools}",
+                f"runtime.max_parallel_agents: {self.session.settings.max_parallel_agents}",
+                f"runtime.max_queued_agents: {self.session.settings.max_queued_agents}",
+                f"runtime.max_subagent_steps: {self.session.settings.max_subagent_steps}",
+                f"runtime.agent_shutdown_grace_seconds: {self.session.settings.agent_shutdown_grace_seconds}",
                 f"runtime.session_retention_days: {self.session.settings.session_retention_days}",
                 f"runtime.yolo: {'on' if self.session.settings.yolo else 'off'}",
             ]
@@ -1861,6 +2258,8 @@ Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall, Note, Ask, MCP, S
         if name not in self.session.config.providers:
             return "Unknown provider: " + name
         self.session.config.active_provider = name
+        if self.session.subagents is not None:
+            self.session.subagents.reload_profiles()  # model 合法性依赖 provider，新 spawn 立即使用重新校验的库。
         return "Set provider = " + name
 
     def model(self, args: str) -> str:
@@ -1939,6 +2338,8 @@ Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall, Note, Ask, MCP, S
                 break  # reasoning 未取消:api 与 reasoning 都确定下来
         provider = self.session.config.provider
         provider.model = model
+        if self.session.subagents is not None:
+            self.session.subagents.reload_profiles()  # 运行中任务仍持有旧快照，只更新之后的 spawn 契约。
         lines = ["Set provider.model = " + model]
         if isinstance(api, str):
             lines.append(self.set_api(api))
@@ -2087,8 +2488,17 @@ class TuiRuntime:
         # Ctrl-O:Bash 输出查看器放在后台线程,避免阻塞 TUI 渲染。
         threading.Thread(target=self.loop.bash_output_viewer, name="bash-output", daemon=True).start()
 
+    def detach_subagent(self) -> None:
+        runtime = self.loop.session.subagents
+        task = runtime.detach_foreground() if runtime is not None else None
+        if task is not None:
+            self.tui.set_running(f"detached {task.task_id}")
+            self.tui.invalidate()
+
     def request_exit(self) -> None:
         self.stop.set()
+        # Ctrl-D 与 /exit 必须走同一条有界关闭路径，不能只依赖最外层入口兜底。
+        self.loop.shutdown_subagents()
         self.loop.save_and_emit_resume()  # 退出前保存会话并打印恢复命令
 
     def force_exit(self) -> None:
@@ -2108,6 +2518,7 @@ class TuiRuntime:
             on_exit_request=self.request_exit,
             on_force_exit=self.force_exit,
             on_interrupt=self.interrupt,
+            on_detach=self.detach_subagent,
             on_retry=self._request_model_retry,
             on_recall=self.recall,
             on_expand_output=self.expand_output,

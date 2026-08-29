@@ -69,10 +69,13 @@ class WorktreeManager:
 
     def prepare(self, task_id: str, previous: Json | None = None) -> Json:
         previous = dict(previous or {})
-        if previous.get("path") and previous.get("cleanup_state") in {"retained", "cleanup_failed"}:
+        if previous.get("path") and previous.get("cleanup_state") in {"active", "retained", "cleanup_failed"}:
             path = str(previous["path"])
             if self._valid_worktree(path):
-                return {**previous, "mode": "worktree", "cleanup_state": "active"}
+                warnings = list(previous.get("warnings") or ())
+                if previous.get("cleanup_state") == "active":
+                    warnings.append("检测到未收口的 worktree 状态，已按保留成果恢复")
+                return {**previous, "mode": "worktree", "cleanup_state": "active", "warnings": list(dict.fromkeys(warnings))}
             raise ToolError(f"保留的 worktree 已不可用: {path}")
 
         repository = str(previous.get("repository") or self.canonical_repository())
@@ -91,6 +94,25 @@ class WorktreeManager:
         path = str(previous.get("path") or self.root.data_path("worktrees", project, task_id))
         os.makedirs(os.path.dirname(path), exist_ok=True)
         if os.path.exists(path) and (not os.path.isdir(path) or os.listdir(path)):
+            current_branch = self._git(path, "branch", "--show-current", check=False).stdout.strip() if self._valid_worktree(path) else ""
+            if not previous and current_branch == branch:
+                # git worktree add 已成功、task metadata 尚未落盘时进程可能退出；任务分支
+                # 此时还没有执行 Agent，故当前 HEAD 就是可信的原始基准。
+                base_commit = self._git(path, "rev-parse", "HEAD").stdout.strip()
+                warnings.append("检测到 worktree 创建后的崩溃窗口，已从任务分支恢复")
+                parent_dirty = bool(self._git(self.root.cwd, "status", "--porcelain", "--untracked-files=all", check=False).stdout.strip())
+                return {
+                    "mode": "worktree",
+                    "path": path,
+                    "branch": branch,
+                    "base_ref": base_ref,
+                    "base_commit": base_commit,
+                    "repository": repository,
+                    "cleanup_state": "active",
+                    "parent_dirty_excluded": True,
+                    "parent_was_dirty": parent_dirty,
+                    "warnings": warnings,
+                }
             raise ToolError(f"worktree 目标路径不是空目录: {path}")
         if self._branch_exists(repository, branch):
             self._git(repository, "worktree", "add", path, branch)
@@ -117,7 +139,7 @@ class WorktreeManager:
         repository = str(workspace.get("repository") or "")
         base_commit = str(workspace.get("base_commit") or "")
         try:
-            status = self._git(path, "status", "--porcelain", "--untracked-files=all").stdout
+            status = self._git(path, "status", "--porcelain=v1", "-z", "--untracked-files=all").stdout
             committed = self._git(path, "diff", "--name-only", "-z", f"{base_commit}..HEAD").stdout
             commit_count = int(self._git(path, "rev-list", "--count", f"{base_commit}..HEAD").stdout.strip() or "0")
             changed = self._changed_files(status, committed)
@@ -215,12 +237,21 @@ class WorktreeManager:
     @staticmethod
     def _changed_files(status: str, committed: str) -> list[str]:
         paths: list[str] = []
-        for line in status.splitlines():
-            path = line[3:].strip() if len(line) >= 4 else ""
-            if " -> " in path:
-                path = path.rsplit(" -> ", 1)[1]
+        entries = status.split("\0")
+        index = 0
+        while index < len(entries):
+            record = entries[index]
+            index += 1
+            if len(record) < 4:
+                continue
+            code, path = record[:2], record[3:]
             if path:
-                paths.append(path.strip('"'))
+                paths.append(path)
+            if ("R" in code or "C" in code) and index < len(entries):
+                source = entries[index]  # porcelain -z 的 rename/copy 紧跟第二个 NUL 路径。
+                index += 1
+                if source:
+                    paths.append(source)
         paths.extend(path for path in committed.split("\0") if path)
         return list(dict.fromkeys(paths))
 

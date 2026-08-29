@@ -48,6 +48,34 @@ class AgentTool(Tool):
         }, ["description", "prompt"])
         # fmt: on
 
+    @classmethod
+    def session_schema(cls, session, strict: bool = False) -> Json:
+        """把当前会话真正可启动的 profile 固化进工具契约。"""
+
+        from yucode.agent_profile import AgentProfileLibrary
+
+        runtime = session.subagents
+        library = runtime.profiles if runtime is not None else AgentProfileLibrary.load(session)
+        profiles = [profile for profile in library.all() if profile.valid]
+        schema = cls.schema(False)
+        parameters = schema["function"]["parameters"]
+        profile_schema = parameters["properties"]["subagent_type"]
+        model_schema = parameters["properties"]["model"]
+        if profiles:
+            profile_schema["enum"] = [profile.name for profile in profiles]
+            choices = "; ".join(
+                f"{profile.name}: {profile.description} ({'background' if profile.background else 'foreground'}, {profile.isolation}, {profile.context}, model={profile.model})"
+                for profile in profiles
+            )
+            profile_schema["description"] = "Agent profile; default general-purpose. Available: " + choices
+        models = list(dict.fromkeys(filter(None, ("inherit", session.config.provider.model, *session.config.provider.available_models))))
+        model_schema["enum"] = models
+        model_schema["description"] = "Model from the current provider; default inherit. Available: " + ", ".join(models)
+        if strict and cls._strictifiable(parameters):
+            schema["function"]["parameters"] = cls._strict_schema(parameters)
+            schema["function"]["strict"] = True
+        return schema
+
     def request(self) -> AgentSpec:
         from yucode.subagent import AgentSpec
 
@@ -117,7 +145,7 @@ class AgentTaskTool(Tool):
         if not task_id:
             raise ToolError(f"AgentTask {action or '(empty)'} 需要 task_id")
         if action == "get":
-            task = runtime.get(task_id)
+            return json.dumps(runtime.details(task_id), ensure_ascii=False, sort_keys=True)
         elif action == "wait":
             raw_timeout = payload.get("timeout_seconds", 120)
             if isinstance(raw_timeout, bool) or not isinstance(raw_timeout, (int, float)):

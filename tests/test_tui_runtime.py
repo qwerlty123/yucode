@@ -793,6 +793,19 @@ def test_manual_resend_preserves_stream_driven_status(tmp_path, monkeypatch):
     assert command_loop.session.state.model_retry_count == 1
 
 
+def test_ctrl_d_exit_closes_subagents_before_saving_session(tmp_path):
+    command_loop = loop(tmp_path)
+    events = []
+    command_loop.shutdown_subagents = lambda: events.append("agents")
+    command_loop.save_and_emit_resume = lambda: events.append("session")
+    runtime = TuiRuntime(command_loop)
+
+    runtime.request_exit()
+
+    assert runtime.stop.is_set()
+    assert events == ["agents", "session"]
+
+
 def test_recalling_sent_input_does_not_leave_revising_status(tmp_path, monkeypatch):
     command_loop = loop(tmp_path)
     command_loop.tui = TuiApp()
@@ -917,7 +930,7 @@ def test_start_session_does_not_scan_or_refresh_code_index(tmp_path, monkeypatch
     monkeypatch.setattr(
         CodeIndex,
         "status",
-        lambda _index, *, check=False, max_pending_files=20: (status_checks.append(check) or ("ready", "")),
+        lambda _index, *, check=False, max_pending_files=20: status_checks.append(check) or ("ready", ""),
     )
     monkeypatch.setattr(CodeIndex, "refresh_existing_async", lambda _index: pytest.fail("startup refreshed the code index"))
 

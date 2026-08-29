@@ -602,6 +602,10 @@ model = ""
 # max_context_tokens = 262144      # 256K; how much of the model's window to use, not its size.
                                # Raise it for a 1M-window model; lower it for a smaller one.
 # max_agent_steps = 200
+# max_parallel_agents = 4
+# max_queued_agents = 16
+# max_subagent_steps = 80
+# agent_shutdown_grace_seconds = 2
 # shell_timeout = 60
 
 # [mcp.example]                # url (+ auth = "oauth") for remote, or command/args for stdio

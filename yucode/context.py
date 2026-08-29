@@ -132,6 +132,8 @@ class ContextManager:
         return self.session.mcp.render_tools_index() if self.session.mcp else ""  # 无 MCP 管理器时返回空串
 
     def memory_context(self) -> str:
+        if (snapshot := getattr(self.session, "memory_context_snapshot", None)) is not None:
+            return snapshot  # child 只读使用 spawn 时快照，不触碰根 ProjectMemory 缓存。
         return self.session.memory.context() if self.session.memory else ""  # Module 内部冻结为会话稳定的启动快照
 
     def skills_context(self) -> str:

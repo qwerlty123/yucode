@@ -10,6 +10,7 @@ from yucode.base import ToolError
 from yucode.context import ContextManager
 from yucode.runner import ToolRunner
 from yucode.subagent import AgentSpec, SubagentRuntime
+from yucode.workspace import WorktreeManager
 
 
 def _git(path, *args):
@@ -88,6 +89,36 @@ def test_read_only_shared_profile_does_not_take_writer_lease(tmp_path):
     runtime.close()
 
 
+def test_shared_writers_waiting_for_lease_do_not_starve_read_only_tasks(tmp_path):
+    root = session(tmp_path)
+    root.config.provider.model = "test-model"
+    root.settings.max_parallel_agents = 2
+    first_started = threading.Event()
+    read_started = threading.Event()
+    release = threading.Event()
+
+    def execute(_child, prompt):
+        if prompt == "first":
+            first_started.set()
+            release.wait(timeout=2)
+        elif prompt == "read":
+            read_started.set()
+        return "完成"
+
+    runtime = SubagentRuntime(root, executor=execute)
+    first = runtime.start(AgentSpec("写一", "first", run_in_background=True))
+    assert first_started.wait(timeout=1)
+    second = runtime.start(AgentSpec("写二", "second", run_in_background=True))
+    reader = runtime.start(AgentSpec("读取", "read", subagent_type="explore", run_in_background=True))
+
+    assert read_started.wait(timeout=1)
+    assert runtime.wait(reader.task_id, 2).status == "completed"
+    release.set()
+    assert runtime.wait(first.task_id, 2).status == "completed"
+    assert runtime.wait(second.task_id, 2).status == "completed"
+    runtime.close()
+
+
 def test_worktree_uses_origin_default_and_preserves_committed_changes(tmp_path):
     repository = _repository(tmp_path)
     _git(repository, "checkout", "-b", "feature")
@@ -122,6 +153,23 @@ def test_worktree_uses_origin_default_and_preserves_committed_changes(tmp_path):
     assert not (repository / "agent.txt").exists()
     assert (repository / "tracked.txt").read_text(encoding="utf-8") == "feature dirty\n"
     runtime.close()
+
+
+def test_worktree_prepare_recovers_a_crash_after_git_add_before_metadata(tmp_path):
+    repository = _repository(tmp_path)
+    root = session(repository)
+    root.config.data_dir = str(tmp_path / "data")
+    manager = WorktreeManager(root)
+
+    created = manager.prepare("agent-crash-window")
+    recovered = manager.prepare("agent-crash-window")
+
+    assert recovered["path"] == created["path"]
+    assert recovered["branch"] == created["branch"]
+    assert recovered["base_commit"] == created["base_commit"]
+    assert recovered["cleanup_state"] == "active"
+    assert any("崩溃窗口" in warning for warning in recovered["warnings"])
+    assert manager.clean(recovered)["cleanup_state"] == "cleaned"
 
 
 def test_clean_worktree_is_removed_and_changed_worktree_needs_confirmed_clean(tmp_path):
@@ -231,3 +279,127 @@ def test_failed_explicit_worktree_cleanup_keeps_recovery_metadata(tmp_path, monk
     assert failed.workspace["branch"] == metadata["branch"]
     assert failed.workspace["base_commit"] == metadata["base_commit"]
     runtime.close()
+
+
+def test_worktree_inspection_failure_is_retained_with_recovery_metadata(tmp_path):
+    repository = _repository(tmp_path)
+    root = session(repository)
+    root.config.data_dir = str(tmp_path / "data")
+    root.config.provider.model = "test-model"
+    runtime = None
+
+    def execute(child, _prompt):
+        assert runtime is not None
+        original = runtime.worktrees._git
+
+        def fail_status(cwd, *args, check=True):
+            if cwd == child.cwd and args[:2] == ("status", "--porcelain=v1"):
+                raise ToolError("模拟检查失败")
+            return original(cwd, *args, check=check)
+
+        runtime.worktrees._git = fail_status
+        return "完成"
+
+    runtime = SubagentRuntime(root, executor=execute)
+    task = runtime.spawn(AgentSpec("检查失败", "执行", isolation="worktree"))
+
+    assert task.status == "completed"
+    assert task.workspace["cleanup_state"] == "retained"
+    assert "模拟检查失败" in task.workspace["inspection_error"]
+    assert os.path.isdir(task.workspace["path"])
+    assert any("状态检查失败" in warning for warning in task.warnings)
+    runtime.close()
+
+
+def test_worktree_changed_files_parses_nul_paths_without_git_quoting():
+    changed = WorktreeManager._changed_files(
+        "?? 中文 文件.txt\0R  新\n名.txt\0旧名.txt\0",
+        "已提交 文件.txt\0",
+    )
+
+    assert changed == ["中文 文件.txt", "新\n名.txt", "旧名.txt", "已提交 文件.txt"]
+
+
+def test_worktree_changed_files_reports_both_sides_of_a_real_rename(tmp_path):
+    repository = _repository(tmp_path)
+    root = session(repository)
+    root.config.data_dir = str(tmp_path / "data")
+    manager = WorktreeManager(root)
+    workspace = manager.prepare("agent-rename")
+    _git(workspace["path"], "mv", "tracked.txt", "新 名.txt")
+
+    retained, changed, _warnings = manager.finalize(workspace)
+
+    assert retained["cleanup_state"] == "retained"
+    assert changed == ["新 名.txt", "tracked.txt"]
+    assert manager.clean(retained)["cleanup_state"] == "cleaned"
+
+
+def test_resume_rebuilds_an_already_cleaned_worktree_from_recorded_commit(tmp_path):
+    repository = _repository(tmp_path)
+    root = session(repository)
+    root.config.data_dir = str(tmp_path / "data")
+    root.config.provider.model = "test-model"
+    paths = []
+
+    def execute(child, prompt):
+        paths.append(child.cwd)
+        child.messages.append({"role": "assistant", "content": prompt})
+        if prompt == "第二次":
+            Path(child.cwd, "result.txt").write_text("结果\n", encoding="utf-8")
+        return "完成"
+
+    runtime = SubagentRuntime(root, executor=execute)
+    first = runtime.spawn(AgentSpec("重建", "第一次", isolation="worktree"))
+
+    assert first.workspace["cleanup_state"] == "cleaned"
+    assert not os.path.exists(first.workspace["path"])
+    second = runtime.resume(first.task_id, "第二次")
+
+    assert second.attempt == 2
+    assert paths == [first.workspace["path"], first.workspace["path"]]
+    assert second.workspace["base_commit"] == first.workspace["base_commit"]
+    assert second.workspace["cleanup_state"] == "retained"
+    runtime.close()
+
+
+def test_shutdown_timeout_persists_worktree_as_retained_and_resume_reuses_it(tmp_path):
+    repository = _repository(tmp_path)
+    root = session(repository)
+    root.config.data_dir = str(tmp_path / "data")
+    root.config.provider.model = "test-model"
+    root.settings.agent_shutdown_grace_seconds = 0
+    started = threading.Event()
+    release = threading.Event()
+
+    def block(child, _prompt):
+        child.messages.append({"role": "assistant", "content": "可恢复检查点"})
+        child.save_snapshot()
+        started.set()
+        release.wait(timeout=2)
+        return "迟到结果"
+
+    runtime = SubagentRuntime(root, executor=block)
+    task = runtime.start(AgentSpec("退出保留", "执行", isolation="worktree", run_in_background=True))
+    assert started.wait(timeout=2)
+
+    runtime.close()
+    interrupted = runtime.get(task.task_id)
+
+    assert interrupted.status == "interrupted"
+    assert interrupted.stop_reason == "shutdown-timeout"
+    assert interrupted.workspace["cleanup_state"] == "retained"
+    assert os.path.isdir(interrupted.workspace["path"])
+    release.set()
+    thread = runtime._tasks[task.task_id].thread
+    assert thread is not None
+    thread.join(timeout=1)
+
+    restored = SubagentRuntime(root, executor=lambda _child, _prompt: "恢复完成")
+    launched = restored.resume(task.task_id, "继续")
+    resumed = restored.wait(launched.task_id, 2)
+
+    assert resumed.status == "completed"
+    assert resumed.attempt == 2
+    assert resumed.workspace["cleanup_state"] == "cleaned"
+    restored.close()

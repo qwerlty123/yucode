@@ -129,6 +129,8 @@ def main(argv: list[str] | None = None) -> int:
             try:
                 code = command_loop.run()
             finally:
+                if shutdown := getattr(command_loop, "shutdown_subagents", None):
+                    shutdown()
                 command_loop.close_background_output()
                 if session.mcp is not None:
                     session.mcp.close()

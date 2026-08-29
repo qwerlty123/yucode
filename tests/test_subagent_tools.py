@@ -64,6 +64,25 @@ def test_agent_tool_returns_background_task_and_agenttask_controls_it(tmp_path):
     runtime.close()
 
 
+def test_root_cancel_does_not_stop_a_detached_foreground_task(tmp_path):
+    root = session(tmp_path)
+    root.config.provider.model = "test-model"
+    release = threading.Event()
+    runtime = SubagentRuntime(root, executor=lambda _child, _prompt: release.wait(timeout=2) or "完成")
+    task = runtime.start(AgentSpec("前台", "执行"))
+    runner = ToolRunner(root, ContextManager(root), output_fn=lambda _text: None)
+    with runner._active_subagents_lock:
+        runner._active_subagents.add(task.task_id)
+
+    runtime.detach(task.task_id)
+    runner.cancel()
+
+    assert not runtime._require(task.task_id).cancel_event.is_set()
+    release.set()
+    assert runtime.wait(task.task_id, timeout_seconds=2).status == "completed"
+    runtime.close()
+
+
 def test_nested_agent_tool_is_rejected_even_if_manually_constructed(tmp_path):
     root = session(tmp_path)
     root.config.provider.model = "test-model"
@@ -74,6 +93,28 @@ def test_nested_agent_tool_is_rejected_even_if_manually_constructed(tmp_path):
 
     with pytest.raises(ToolError, match="不允许再启动"):
         AgentTool(child, [{"description": "嵌套", "prompt": "执行"}]).call()
+    runtime.close()
+
+
+def test_spawn_alias_cannot_omit_child_caller_identity(tmp_path):
+    root = session(tmp_path)
+    root.config.provider.model = "test-model"
+    runtime = None
+
+    def execute(_child, _prompt):
+        assert runtime is not None
+        try:
+            runtime.start(AgentSpec("伪造 alias", "嵌套"))
+        except ToolError as error:
+            return str(error)
+        return "错误：嵌套成功"
+
+    runtime = SubagentRuntime(root, executor=execute)
+    task = runtime.spawn(AgentSpec("外层", "执行"))
+
+    assert task.status == "completed"
+    assert "不允许再启动" in task.result
+    assert len(runtime.list()) == 1
     runtime.close()
 
 
@@ -88,13 +129,26 @@ def test_background_interaction_waits_for_matching_durable_response(tmp_path):
         return runtime.interactions.request(
             child.subagent_task_id,
             "ask",
-            {"tool_name": "Ask", "question": "继续吗？", "choices": ["继续", "停止"]},
+            {
+                "tool_name": "Ask",
+                "question": "继续吗？",
+                "choices": ["继续", "停止"],
+                "previews": ["继续执行", "立即结束"],
+                "recommended": 0,
+                "position": "先确认范围",
+            },
         )
 
     runtime = SubagentRuntime(root, executor=execute)
     launched = runtime.spawn(AgentSpec("交互", "执行", run_in_background=True))
     waiting = _wait_for_status(runtime, launched.task_id, "waiting_interaction")
     request = waiting.pending_interaction
+
+    assert request["task_id"] == launched.task_id
+    assert request["attempt"] == 1
+    assert request["previews"] == ["继续执行", "立即结束"]
+    assert request["recommended"] == 0
+    assert request["position"] == "先确认范围"
 
     with pytest.raises(ToolError, match="digest"):
         runtime.respond_interaction(launched.task_id, request["request_id"], "错误", "继续")
@@ -127,6 +181,34 @@ def test_background_interaction_fails_closed_without_a_user_channel(tmp_path):
     assert completed.status == "completed"
     assert completed.result == "n"
     assert completed.pending_interaction["status"] == "answered"
+    runtime.close()
+
+
+def test_foreground_interaction_uses_the_root_user_channel_immediately(tmp_path):
+    root = session(tmp_path)
+    root.config.provider.model = "test-model"
+    requests = []
+    root.subagent_interaction_available = True
+    root.subagent_interaction_handler = lambda request: requests.append(request) or "yes"
+    runtime = None
+
+    def execute(child, _prompt):
+        assert runtime is not None
+        return runtime.interactions.request(
+            child.subagent_task_id,
+            "approval",
+            {"tool_name": "Edit", "arguments": {"path": "a.txt"}, "cwd": child.cwd, "preview": "diff"},
+        )
+
+    runtime = SubagentRuntime(root, executor=execute)
+    task = runtime.spawn(AgentSpec("前台交互", "执行"))
+
+    assert task.status == "completed"
+    assert task.result == "yes"
+    assert requests[0]["tool_name"] == "Edit"
+    assert requests[0]["content_summary"] == "diff"
+    assert requests[0]["status"] == "pending"
+    assert task.pending_interaction["status"] == "answered"
     runtime.close()
 
 

@@ -88,6 +88,10 @@ class Agent:
         # 排队消息被刷入回合时回调(携带这些消息),UI 借此把它们从活动队列区移到
         # scrollback 日志里。由 CommandLoop 设置。
         self.on_queue_flush: Callable[[list[str]], None] | None = None
+        if isinstance(session, Session) and not session.subagent_task_id and session.subagents is None:
+            from yucode.subagent import SubagentRuntime
+
+            SubagentRuntime(session)
 
     def cancel(self) -> None:
         # 取消是"协作式"的:置位信号并通知工具/模型中断,让运行中的请求自行退出。
@@ -104,13 +108,18 @@ class Agent:
 
     def raise_if_cancelled(self) -> None:
         # 把取消翻译成 KeyboardInterrupt,复用 run() 里 Ctrl-C 的同一套收尾路径。
-        if self.cancel_requested.is_set():
+        external = getattr(self.session, "cancellation_event", None)
+        if self.cancel_requested.is_set() or (external is not None and external.is_set()):
             raise KeyboardInterrupt
 
-    def run(self, user_input: str | UserInput) -> str:
+    def run(self, user_input: str | UserInput, *, reset_cancel: bool | None = None) -> str:
         # —— 回合开始:重置每回合状态 ——
         self.stop_reason = ""
-        self.cancel_requested.clear()  # 上一回合可能留下取消信号,必须清掉
+        if reset_cancel is None:
+            # 根 Agent 复用实例时每回合清空旧取消；child 则必须保留启动竞态中的取消。
+            reset_cancel = not bool(getattr(self.session, "subagent_task_id", ""))
+        if reset_cancel:
+            self.cancel_requested.clear()  # 根 Agent 复用对象时清掉上一回合取消；child 保留启动竞态中的取消。
         self.turn_sources = []  # 本回合内 provider 搜索来源从零收集
         self.session.clear_quick_hints()  # 新回合使上一回合给出的 quick hints 全部失效
         self.session.state.round_count += 1  # 回合计数:跨回合状态(如 diff 归属)靠它判定

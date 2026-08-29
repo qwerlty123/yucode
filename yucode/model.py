@@ -115,6 +115,10 @@ class ModelClient:
         with contextlib.suppress(Exception):  # close() 可能抛错(如阻塞在 I/O),但取消路径必须无条件继续
             self.active_client.apply(lambda client: client.close())
 
+    def cancellation_requested(self) -> bool:
+        external = getattr(self.session, "cancellation_event", None)
+        return self.cancel_requested.is_set() or (external is not None and external.is_set())
+
     def chat_messages(self, messages: list[Json]) -> list[Json]:
         """按 provider 文档规定的回放契约构建 Chat Completions 历史。"""
 
@@ -245,8 +249,10 @@ class ModelClient:
             if timer is not None:
                 timer.start()
             try:
+                if self.cancellation_requested():
+                    raise KeyboardInterrupt
                 result = request()
-                if self.cancel_requested.is_set():
+                if self.cancellation_requested():
                     raise KeyboardInterrupt  # 请求成功但已被取消:同样视为中断
                 if expired.is_set():
                     # 成功返回但总时长已超:超时优先于成功结果。
@@ -257,7 +263,7 @@ class ModelClient:
             except ModelResponseTimeout:
                 raise  # 超时原样上抛,上层据此决定是否重试
             except Exception as error:
-                if self.cancel_requested.is_set():
+                if self.cancellation_requested():
                     raise KeyboardInterrupt from None  # 取消优先于任何错误;不留原因链
                 if expired.is_set():
                     raise ModelResponseTimeout(
@@ -274,6 +280,8 @@ class ModelClient:
         if missing := self.session.missing_config():
             raise ModelError("missing config: " + ", ".join(missing))  # 缺配置是决策错误,直接失败,不值得重试
         self.cancel_requested.clear()  # 复用 ModelClient 前清除上一次请求的取消信号
+        if self.cancellation_requested():
+            raise KeyboardInterrupt
         tools = tools if tools is not None else Tool.resolved_schemas(self.session)
         state = self.session.state
         state.model_retry_reason = ""  # 只在真正重试时写入,状态栏据此显示
@@ -1442,7 +1450,7 @@ class ModelClient:
 
     @classmethod
     def tool_payload(cls, name: str, payload: object, *, catalog: ToolCatalog | None = None) -> ToolArgs:
-        registry = catalog or TOOL_REGISTRY
+        registry = TOOL_REGISTRY if catalog is None else catalog
         if isinstance(payload, dict) and (tool := registry.get(name)):
             # strict schema 把可选参数表达为可空,因此模型可能对省略的参数显式发送 null。
             # 在 yucode 的所有工具里 null 都表示"缺省",所以直接丢弃。

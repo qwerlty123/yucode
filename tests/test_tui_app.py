@@ -446,6 +446,22 @@ def test_interactive_tui_control_backslash_forces_exit(monkeypatch):
     assert forced == [True]
 
 
+def test_interactive_tui_control_b_detaches_foreground_subagent(monkeypatch):
+    detached = []
+    app = None
+
+    def detach():
+        detached.append(True)
+        app.app.exit()
+
+    app = TuiApp(on_detach=detach)
+    app.set_running("working")
+
+    run_interactive_tui(monkeypatch, app, text="\x02")
+
+    assert detached == [True]
+
+
 def test_interactive_tui_recalls_and_submits_queued_input(monkeypatch):
     received = []
     recalled = []

@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 import re
 from dataclasses import dataclass, replace
 
+from yucode.base import ToolError
 from yucode.session import Session
 
 
@@ -48,8 +50,11 @@ class AgentProfileLibrary:
     FRONTMATTER = re.compile(r"^---\n(.*?)\n---\n?(.*)$", re.DOTALL)
     META_LINE = re.compile(r"^([A-Za-z0-9_-]+):[ \t]*(.*)$", re.MULTILINE)
 
-    def __init__(self, profiles: dict[str, AgentProfile]):
+    NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+
+    def __init__(self, profiles: dict[str, AgentProfile], session: Session):
         self.profiles = profiles
+        self.session = session
 
     @classmethod
     def load(cls, session: Session) -> AgentProfileLibrary:
@@ -61,8 +66,12 @@ class AgentProfileLibrary:
         for root, source in roots:
             if not os.path.isdir(root):
                 continue
+            try:
+                entries = sorted(os.listdir(root))
+            except OSError:
+                continue  # 单个 profile 根目录不可读不能阻止 yucode 启动；其余层仍然可用。
             source_seen: dict[str, AgentProfile] = {}
-            for entry in sorted(os.listdir(root)):
+            for entry in entries:
                 path = os.path.join(root, entry, "AGENT.md")
                 if not os.path.isfile(path):
                     continue
@@ -74,7 +83,7 @@ class AgentProfileLibrary:
                     profile = replace(profile, errors=(*profile.errors, f"同一层级存在大小写不敏感的名称歧义: {paths}"))
                 source_seen[key] = profile
                 profiles[key] = profile
-        return cls(profiles)
+        return cls(profiles, session)
 
     @staticmethod
     def builtins() -> tuple[AgentProfile, ...]:
@@ -118,9 +127,11 @@ class AgentProfileLibrary:
         warnings: list[str] = []
         if not fields.get("name", "").strip():
             errors.append("缺少 name")
+        elif not cls.NAME.fullmatch(name):
+            errors.append("name 必须由字母、数字、连字符或下划线组成，最长 64 字符")
         if not description:
             errors.append("缺少 description")
-        tools = cls.csv(fields.get("tools", "*")) or ("*",)
+        tools = ("*",) if "tools" not in fields else cls.csv(fields["tools"])
         denied = cls.csv(fields.get("disallowed_tools", ""))
         known = set(session.tool_catalog.names if session.tool_catalog else ())
         for tool in (*(() if tools == ("*",) else tools), *denied):
@@ -130,7 +141,7 @@ class AgentProfileLibrary:
         if overlap:
             errors.append("工具同时出现在允许和禁止列表: " + ", ".join(overlap))
         model = fields.get("model", "inherit").strip() or "inherit"
-        available_models = session.config.provider.available_models
+        available_models = {session.config.provider.model, *session.config.provider.available_models}
         if model != "inherit" and available_models and model not in available_models:
             errors.append(f"当前 provider 不提供模型: {model}")
         isolation = fields.get("isolation", "shared").strip().lower() or "shared"
@@ -214,3 +225,104 @@ class AgentProfileLibrary:
         profile = self.profiles.get(key)
         if profile is not None:
             self.profiles[key] = replace(profile, errors=(*profile.errors, message))
+
+    def create(self, name: str, *, source: str = "project", template: AgentProfile | None = None) -> AgentProfile:
+        name = self._name(name)
+        path = self._custom_path(name, source)
+        directory = os.path.dirname(path)
+        root = os.path.dirname(directory)
+        if os.path.isdir(root):
+            try:
+                entries = os.listdir(root)
+            except OSError as error:
+                raise ToolError(f"读取 Agent profile 目录失败: {error}") from error
+            for entry in entries:
+                existing = os.path.join(root, entry, "AGENT.md")
+                if not os.path.isfile(existing):
+                    continue
+                parsed = self.parse(existing, entry, source, self.session)
+                if parsed.name.casefold() == name.casefold():
+                    raise ToolError(f"Agent profile 已存在于 {source} 层: {parsed.name}")
+        try:
+            os.makedirs(directory, exist_ok=False)
+        except OSError as error:
+            raise ToolError(f"创建 Agent profile 失败: {error}") from error
+        profile = template or AgentProfile(name, "自定义子 Agent", "完成委派任务并返回可验证结果。", source=source, path=path)
+        try:
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write(self.serialize(profile, name))
+        except OSError as error:
+            with contextlib.suppress(OSError):
+                os.unlink(path)
+            with contextlib.suppress(OSError):
+                os.rmdir(directory)
+            raise ToolError(f"创建 Agent profile 失败: {error}") from error
+        self._refresh()
+        return self.parse(path, name, source, self.session)
+
+    def copy(self, source_name: str, name: str, *, source: str = "project") -> AgentProfile:
+        template = self.get(source_name)
+        if template is None:
+            raise ToolError(f"未知 Agent profile: {source_name}")
+        return self.create(name, source=source, template=template)
+
+    def delete(self, name: str) -> None:
+        profile = self.get(name)
+        if profile is None:
+            raise ToolError(f"未知 Agent profile: {name}")
+        if profile.source == "builtin" or not profile.path:
+            raise ToolError("内置 Agent profile 只读，不能删除")
+        try:
+            os.unlink(profile.path)
+        except OSError as error:
+            raise ToolError(f"删除 Agent profile 失败: {error}") from error
+        with contextlib.suppress(OSError):
+            os.rmdir(os.path.dirname(profile.path))
+        self._refresh()
+
+    def _refresh(self) -> None:
+        loaded = self.load(self.session)
+        self.profiles = loaded.profiles
+
+    def _custom_path(self, name: str, source: str) -> str:
+        if source == "project":
+            root = os.path.join(self.session.cwd, ".yucode", "agents")
+        elif source == "user":
+            root = self.session.data_path("agents")
+        else:
+            raise ToolError("Agent profile source 必须是 project 或 user")
+        return os.path.join(root, name, "AGENT.md")
+
+    @classmethod
+    def _name(cls, name: str) -> str:
+        name = name.strip()
+        if not cls.NAME.fullmatch(name):
+            raise ToolError("Agent profile 名称必须由字母、数字、连字符或下划线组成，最长 64 字符")
+        return name
+
+    @staticmethod
+    def serialize(profile: AgentProfile, name: str) -> str:
+        rows = [
+            "---",
+            f"name: {name}",
+            f"description: {profile.description or '自定义子 Agent'}",
+            "tools: " + ", ".join(profile.tools),
+        ]
+        if profile.disallowed_tools:
+            rows.append("disallowed_tools: " + ", ".join(profile.disallowed_tools))
+        rows.extend(
+            [
+                f"model: {profile.model}",
+                f"background: {'true' if profile.background else 'false'}",
+                f"isolation: {profile.isolation}",
+                f"context: {profile.context}",
+            ]
+        )
+        if profile.max_steps:
+            rows.append(f"max_steps: {profile.max_steps}")
+        if profile.timeout_seconds:
+            rows.append(f"timeout_seconds: {profile.timeout_seconds}")
+        if profile.skills:
+            rows.append("skills: " + ", ".join(profile.skills))
+        rows.extend(["---", profile.prompt or "完成委派任务并返回可验证结果。", ""])
+        return "\n".join(rows)

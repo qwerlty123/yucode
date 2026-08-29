@@ -3,6 +3,7 @@ rendering, and status output."""
 
 import json
 import os
+import threading
 import time
 import tomllib
 from types import SimpleNamespace
@@ -15,6 +16,7 @@ from prompt_toolkit.document import Document
 
 import yucode.loop as loop_module
 from yucode.base import (
+    DISMISSED,
     SELECTION_FREE_TEXT,
     SESSION_EVENT_KEY,
     Config,
@@ -32,6 +34,7 @@ from yucode.render import StatusBar
 from yucode.runner import ToolRunner
 from yucode.session import Session, SessionSnapshotStore, ToolResultRecord
 from yucode.skill import SkillLibrary
+from yucode.subagent import AgentSpec, SubagentRuntime
 from yucode.tools import AskSpec, CodeIndex, SkillTool, Tool
 from yucode.tui import TuiApp
 
@@ -886,7 +889,7 @@ def test_builtin_yucode_help_uses_normal_skill_paths(tmp_path):
     body = SkillTool(s, ["yucode-help"]).call()
     assert "## Inspect the implementation" in body
     assert "### Provider-side tools and web search" in body
-    assert all(term in body for term in ("builtin_tools", "$web_search", 'pause_turn', "OpenRouter"))
+    assert all(term in body for term in ("builtin_tools", "$web_search", "pause_turn", "OpenRouter"))
     assert "## Configure providers" in s.skills.resolve_mentions("help with $yucode-help")
 
 
@@ -1105,3 +1108,176 @@ def test_session_from_config_file_theme_param(tmp_path):
 
     s3 = Session.from_config_file(path=str(cfg), theme="")
     assert s3.settings.theme == "light"
+
+
+def test_agents_commands_run_inspect_steer_wait_stop_and_close(tmp_path):
+    s = session(tmp_path)
+    s.config.provider.model = "test-model"
+    started = threading.Event()
+    release = threading.Event()
+
+    def execute(child, _prompt):
+        child.messages.append({"role": "assistant", "content": "可恢复记录"})
+        started.set()
+        release.wait(timeout=2)
+        return "完成"
+
+    runtime = SubagentRuntime(s, executor=execute)
+    command_loop = CommandLoop(Agent(s, output_fn=lambda _text: None), input_fn=lambda _prompt: "", output_fn=lambda _text: None)
+    launched = json.loads(command_loop.agents_command("run explore --background -- 检查代码"))
+    assert started.wait(timeout=1)
+
+    listed = command_loop.agents_command("list")
+    shown = json.loads(command_loop.agents_command("show " + launched["task_id"]))
+    steered = json.loads(command_loop.agents_command("steer " + launched["task_id"] + " -- 补充检查测试"))
+
+    assert launched["profile"] == "explore"
+    assert launched["run_in_background"] is True
+    assert launched["task_id"] in listed
+    assert shown["description"] == "检查代码"
+    assert steered["status"] == "running"
+    release.set()
+    waited = json.loads(command_loop.agents_command("wait " + launched["task_id"] + " 2"))
+    assert waited["status"] == "completed"
+    closed = json.loads(command_loop.agents_command("close " + launched["task_id"]))
+    assert closed["status"] == "completed"
+    assert closed["closed"] is True
+    runtime.close()
+
+
+def test_agents_reload_and_noninteractive_clean_fail_closed(tmp_path):
+    s = session(tmp_path)
+    s.config.provider.model = "test-model"
+    runtime = SubagentRuntime(s, executor=lambda _child, _prompt: "完成")
+    command_loop = CommandLoop(Agent(s, output_fn=lambda _text: None), input_fn=lambda _prompt: "", output_fn=lambda _text: None)
+
+    assert "profiles" in command_loop.agents_command("reload")
+    assert "Usage:" in command_loop.agents_command("run")
+    assert "需要交互确认" in command_loop.agents_command("clean missing")
+    runtime.close()
+
+
+def test_background_completion_stays_visible_until_notification_is_consumed(tmp_path):
+    s = session(tmp_path)
+    s.config.provider.model = "test-model"
+    runtime = SubagentRuntime(s, executor=lambda _child, _prompt: "后台结果")
+    task = runtime.spawn(AgentSpec("后台", "执行", run_in_background=True))
+    runtime.wait(task.task_id, 2)
+    command_loop = CommandLoop(Agent(s, output_fn=lambda _text: None), input_fn=lambda _prompt: "", output_fn=lambda _text: None)
+
+    assert any(task.task_id in line and "completed" in line for line in command_loop.subagent_activity_lines())
+    runtime.claim_notifications()
+    runtime.acknowledge_notifications([task.task_id])
+    assert command_loop.subagent_activity_lines() == []
+    runtime.close()
+
+
+def test_exit_closes_subagent_runtime_before_returning(tmp_path):
+    s = session(tmp_path)
+    closed = []
+    s.subagents = SimpleNamespace(close=lambda: closed.append("agents"))
+    command_loop = CommandLoop(Agent(s, output_fn=lambda _text: None), input_fn=lambda _prompt: "", output_fn=lambda _text: None)
+    command_loop.save_and_emit_resume = lambda: closed.append("session")
+
+    assert command_loop.command("/exit") == (True, True)
+    assert closed == ["agents", "session"]
+
+
+def test_agents_manager_can_steer_an_active_task(tmp_path):
+    s = session(tmp_path)
+    s.config.provider.model = "test-model"
+    started = threading.Event()
+    release = threading.Event()
+
+    def execute(_child, _prompt):
+        started.set()
+        release.wait(timeout=2)
+        return "完成"
+
+    runtime = SubagentRuntime(s, executor=execute)
+    task = runtime.start(AgentSpec("等待", "执行", run_in_background=True))
+    assert started.wait(timeout=1)
+    command_loop = CommandLoop(Agent(s, output_fn=lambda _text: None), input_fn=lambda _prompt: "", output_fn=lambda _text: None)
+
+    class Modal:
+        calls = 0
+
+        def show_modal(self, fragments_fn, key_fn):
+            fragments_fn()
+            self.calls += 1
+            return key_fn("g", "") if self.calls == 1 else None
+
+        @staticmethod
+        def request_input(_prompt):
+            return "补充验证边界"
+
+    command_loop.tui = Modal()
+    command_loop.agents_manager(runtime)
+
+    child = runtime._tasks[task.task_id].child
+    assert child is not None
+    assert [item.text for item in child.pending_user_inputs] == ["补充验证边界"]
+    runtime.stop(task.task_id)
+    release.set()
+    runtime.wait(task.task_id, 2)
+    runtime.close()
+
+
+def test_stale_subagent_interaction_does_not_open_ui(tmp_path):
+    s = session(tmp_path)
+    request = {
+        "task_id": "agent-stale",
+        "request_id": "interaction-stale",
+        "digest": "digest-stale",
+        "kind": "ask",
+        "status": "pending",
+        "question": "不应显示",
+    }
+    s.subagents = SimpleNamespace(
+        get=lambda _task_id: SimpleNamespace(
+            status="cancelled",
+            pending_interaction={**request, "status": "cancelled"},
+        )
+    )
+    command_loop = CommandLoop(Agent(s, output_fn=lambda _text: None), input_fn=lambda _prompt: "", output_fn=lambda _text: None)
+    shown = []
+    command_loop.question_interaction = lambda *_args: shown.append(True) or "已显示"
+
+    assert command_loop.subagent_interaction(request) == DISMISSED
+    assert shown == []
+
+
+def test_agents_manager_can_resume_a_terminal_task(tmp_path):
+    s = session(tmp_path)
+    s.config.provider.model = "test-model"
+    prompts = []
+
+    def execute(child, prompt):
+        prompts.append(prompt)
+        child.messages.append({"role": "assistant", "content": prompt})
+        child.save_snapshot()
+        return "完成"
+
+    runtime = SubagentRuntime(s, executor=execute)
+    task = runtime.spawn(AgentSpec("恢复", "第一次", run_in_background=True))
+    assert runtime.wait(task.task_id, 2).status == "completed"
+    command_loop = CommandLoop(Agent(s, output_fn=lambda _text: None), input_fn=lambda _prompt: "", output_fn=lambda _text: None)
+
+    class Modal:
+        calls = 0
+
+        def show_modal(self, fragments_fn, key_fn):
+            fragments_fn()
+            self.calls += 1
+            return key_fn("u", "") if self.calls == 1 else None
+
+        @staticmethod
+        def request_input(_prompt):
+            return "第二次"
+
+    command_loop.tui = Modal()
+    command_loop.agents_manager(runtime)
+
+    assert runtime.wait(task.task_id, 2).attempt == 2
+    assert prompts == ["第一次", "第二次"]
+    runtime.close()

@@ -174,6 +174,7 @@ class TuiApp:
         on_exit_request: Callable[[], None] | None = None,
         on_force_exit: Callable[[], None] | None = None,
         on_interrupt: Callable[[], None] | None = None,
+        on_detach: Callable[[], None] | None = None,
         on_retry: Callable[[], None] | None = None,
         on_recall: Callable[[], str | UserInput] | None = None,
         on_expand_output: Callable[[], None] | None = None,
@@ -193,6 +194,7 @@ class TuiApp:
         self.on_exit_request = on_exit_request or (lambda: None)
         self.on_force_exit = on_force_exit or (lambda: None)
         self.on_interrupt = on_interrupt or (lambda: None)
+        self.on_detach = on_detach or (lambda: None)
         self.on_retry = on_retry or (lambda: None)
         self.on_recall = on_recall or (lambda: "")
         self.on_expand_output = on_expand_output or (lambda: None)
@@ -721,6 +723,7 @@ class TuiApp:
         bindings = KeyBindings()
         modal = Condition(lambda: self.modal is not None)  # 模态激活时,常规按键都改由模态消费
         running = Condition(lambda: self.input_mode == "running" and self.modal is None)
+        working = Condition(lambda: self.input_mode in {"running", "dispatch"} and self.modal is None)
 
         # 模态键表内的键在模态激活时 eager 接管;lambda 用默认参数绑定 key,避免闭包晚绑定
         for key in self.MODAL_KEYS:
@@ -752,6 +755,7 @@ class TuiApp:
 
         bindings.add("c-r", filter=~modal, eager=True)(history_search)
         bindings.add("c-o", filter=~modal, eager=True)(lambda _: self.on_expand_output())  # Ctrl-O:展开上次输出
+        bindings.add("c-b", filter=working, eager=True)(lambda _: self.on_detach())  # Ctrl-B:前台子 Agent 转后台，worker 继续运行
 
         # Ctrl-P 与 Up 在这里等价:readline 视二者为同义词;turn 运行期间两者都召回
         # 最新的排队追问(有草稿时上移光标,无草稿时走历史导航)。
@@ -920,6 +924,31 @@ class TuiApp:
         """Ctrl-X Ctrl-E / Ctrl-G:用外部编辑器编辑当前输入,再把结果加载回来。"""
         if self.app is not None:
             self.app.create_background_task(self._run_input_editor())  # 应用未启动时无事件循环可调度,直接跳过
+
+    def edit_path_in_editor(self, path: str) -> bool:
+        """挂起 TUI 并编辑一个已有文件；调用方 worker 会等编辑器退出。"""
+
+        app = self.app
+        if app is None or not app.is_running:
+            return False
+        done = threading.Event()
+        succeeded = []
+
+        async def edit() -> None:
+            def run_editor() -> bool:
+                try:
+                    return subprocess.run([*self.editor_command(), path], check=False).returncode == 0
+                except OSError:
+                    return False
+
+            try:
+                succeeded.append(await run_in_terminal(run_editor, in_executor=True))
+            finally:
+                done.set()
+
+        self._schedule(lambda: app.create_background_task(edit()))
+        done.wait()
+        return bool(succeeded and succeeded[0])
 
     async def animate(self) -> None:
         """运行区域在屏幕上时,按动画帧率触发重绘。

@@ -52,7 +52,7 @@ class ToolCatalog:
         has_skills = bool(session.skills and session.skills.skills)
         has_mcp = bool(session.mcp and (session.mcp.tools or session.mcp.resources))
         return [
-            tool.schema(strict)
+            tool.session_schema(session, strict)
             for tool in self._tools
             if (tool is not SkillTool or has_skills) and (tool is not MCPTool or has_mcp) and (tool is not NextHintsTool or session.settings.quick_hints)
         ]

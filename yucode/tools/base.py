@@ -61,6 +61,12 @@ class Tool:
             function["strict"] = True  # 标记为严格函数
         return {"type": "function", "function": function}
 
+    @classmethod
+    def session_schema(cls, session: Session, strict: bool = False) -> Json:
+        """返回会话相关的 schema；默认工具沿用静态声明。"""
+
+        return cls.schema(strict)
+
     @staticmethod
     def resolved_schemas(session: Session) -> list[Json]:
         """返回该会话与供应商可用的工具 schema。"""
@@ -68,7 +74,9 @@ class Tool:
         from yucode.tools import TOOL_CATALOG
 
         # 极简测试 Session 可能没有 tool_catalog；正式 Session 会在初始化时绑定目录。
-        catalog = getattr(session, "tool_catalog", None) or TOOL_CATALOG
+        catalog = getattr(session, "tool_catalog", None)
+        if catalog is None:
+            catalog = TOOL_CATALOG
         return catalog.resolved_schemas(session)
 
     @staticmethod

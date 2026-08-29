@@ -122,6 +122,7 @@ class ImageInputs:
         self.session = session
         self.cwd = session.cwd if session is not None else cwd or os.getcwd()
         self.retained_refs: set[str] = set()
+        self.fallback_asset_dirs: tuple[str, ...] = ()  # fork child 只读回退父 session 的已存图片。
         self._learned_support: dict[tuple[str, str, str, str], bool] = {}
 
     @staticmethod
@@ -325,11 +326,12 @@ class ImageInputs:
             return None
 
     def _store(self, image: ImageRef) -> ImageRef:
+        destination = self._primary_asset_path(image)
         if image.source_path:
             current = self._inspect(image.source_path, source_text=image.source_text)
             assert current is not None
             image = replace(current, source_text=image.source_text)
-            destination = self._asset_path(image)
+            destination = self._primary_asset_path(image)
             os.makedirs(os.path.dirname(destination), exist_ok=True)
             if not self._asset_matches(destination, image.ref):
                 fd, temporary = tempfile.mkstemp(prefix=".image-", dir=os.path.dirname(destination))
@@ -344,9 +346,35 @@ class ImageInputs:
                 finally:
                     if os.path.exists(temporary):
                         os.unlink(temporary)
-        elif not os.path.isfile(self._asset_path(image)):
-            raise ModelError(f"Stored image is missing: {image.name} ({image.ref[:12]})")
+        elif not os.path.isfile(destination):
+            source = self._asset_path(image)
+            if source == destination or not os.path.isfile(source):
+                raise ModelError(f"Stored image is missing: {image.name} ({image.ref[:12]})")
+            os.makedirs(os.path.dirname(destination), exist_ok=True)
+            fd, temporary = tempfile.mkstemp(prefix=".image-", dir=os.path.dirname(destination))
+            os.close(fd)
+            try:
+                shutil.copyfile(source, temporary)
+                with open(temporary, "rb") as file:
+                    copied_ref = hashlib.file_digest(file, "sha256").hexdigest()
+                if copied_ref != image.ref:
+                    raise ModelError(f"Stored image is corrupt: {image.name} ({image.ref[:12]})")
+                os.replace(temporary, destination)
+            finally:
+                if os.path.exists(temporary):
+                    os.unlink(temporary)
         return replace(image, source_path="")
+
+    def materialize_messages(self, messages: list[Json]) -> None:
+        """把消息引用的 fallback 图片复制到当前 session assets，使快照不再依赖父会话。"""
+
+        seen: set[str] = set()
+        for message in messages:
+            for image in self.refs(message):
+                if image.ref in seen:
+                    continue
+                seen.add(image.ref)
+                self._store(image)
 
     def _bytes(self, image: ImageRef) -> bytes:
         path = self._asset_path(image)
@@ -363,6 +391,16 @@ class ImageInputs:
         return f"data:{image.media_type};base64,{base64.b64encode(self._bytes(image)).decode('ascii')}"
 
     def _asset_path(self, image: ImageRef) -> str:
+        primary = self._primary_asset_path(image)
+        if os.path.isfile(primary):
+            return primary
+        for directory in self.fallback_asset_dirs:
+            candidate = os.path.join(directory, image.ref)
+            if os.path.isfile(candidate):
+                return candidate
+        return primary
+
+    def _primary_asset_path(self, image: ImageRef) -> str:
         return os.path.join(self.assets_dir(), image.ref)
 
     def _capability_key(self) -> tuple[str, str, str, str]:

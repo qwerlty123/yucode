@@ -11,6 +11,7 @@ from yucode.tools.base import Tool
 class MCPTool(Tool):
     NAME = "MCP"
     CHILD_SAFE = True
+    WORKSPACE_MUTATES = True  # 第三方调用效果未知，shared 模式按潜在 writer 保守串行。
     DESCRIPTION = "Call/describe external MCP server tools, and list/read MCP resources"
     MUTATES = True
 
