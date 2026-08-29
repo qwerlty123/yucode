@@ -1,4 +1,5 @@
 import threading
+import time
 
 import pytest
 from agent_harness import session
@@ -159,3 +160,31 @@ def test_resume_without_a_saved_transcript_fails_explicitly(tmp_path):
     with pytest.raises(ToolError, match="transcript"):
         runtime.resume(task.task_id, "继续")
     runtime.close()
+
+
+def test_restart_marks_pending_interaction_invalid_instead_of_losing_it(tmp_path):
+    root = session(tmp_path)
+    root.config.provider.model = "test-model"
+    root.subagent_interaction_available = True
+    runtime = None
+
+    def execute(child, _prompt):
+        assert runtime is not None
+        return runtime.interactions.request(child.subagent_task_id, "ask", {"question": "等待回答"})
+
+    runtime = SubagentRuntime(root, executor=execute)
+    launched = runtime.spawn(AgentSpec("等待", "执行", run_in_background=True))
+    deadline = time.monotonic() + 2
+    while runtime.get(launched.task_id).status != "waiting_interaction" and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+    recovered = SubagentRuntime(root, executor=execute)
+    task = recovered.get(launched.task_id)
+
+    assert task.status == "interrupted"
+    assert task.stop_reason == "restart"
+    assert task.pending_interaction["status"] == "invalid"
+    assert task.pending_interaction["invalid_reason"] == "restart"
+    runtime.stop(launched.task_id)
+    runtime.close()
+    recovered.close()

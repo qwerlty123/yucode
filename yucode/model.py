@@ -76,6 +76,7 @@ class PreparedRequest:
     messages: list[Json]
     tools: list[Json]
     pending: list[QueuedInput]
+    notifications: tuple[tuple[str, Json], ...] = ()
 
 
 class ModelClient:

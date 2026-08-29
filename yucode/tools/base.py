@@ -36,6 +36,7 @@ class Tool:
     STORES_RESULT: ClassVar[bool] = True
     LOG_LEXER: ClassVar[str] = "tool-args"
     SILENT: ClassVar[bool] = False  # 纯 UI 工具,其效果展示在别处;抑制其调用/结果日志行
+    CHILD_SAFE: ClassVar[bool] = False  # 子会话能力必须显式选择加入，避免未来工具被自动下放
 
     def __init__(self, session: Session, args: ToolArgs):
         self.session = session

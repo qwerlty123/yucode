@@ -5,6 +5,7 @@ from yucode.base import RuntimeSettings
 from yucode.context import ContextManager
 from yucode.model import ModelClient
 from yucode.runner import ToolRunner
+from yucode.subagent import AgentSpec, SubagentRuntime
 from yucode.tools import ReadTool, Tool, ToolCatalog
 
 
@@ -36,6 +37,24 @@ def test_model_argument_parser_uses_the_same_session_catalog(tmp_path):
     assert calls[1].args == [{"path": "a.txt", "ranges": [[0, 0]]}]
 
 
+def test_child_catalog_requires_an_explicit_child_safe_capability(tmp_path):
+    class RootOnlyTool(Tool):
+        NAME = "RootOnly"
+
+    s = session(tmp_path)
+    s.config.provider.model = "test-model"
+    s.tool_catalog = ToolCatalog((ReadTool, RootOnlyTool))
+    seen = []
+    runtime = SubagentRuntime(s, executor=lambda child, _prompt: seen.extend(child.tool_catalog.names) or "完成")
+
+    task = runtime.spawn(AgentSpec("边界", "执行"))
+
+    assert task.status == "completed"
+    assert "Read" in seen
+    assert "RootOnly" not in seen
+    runtime.close()
+
+
 def test_agent_profiles_follow_builtin_user_project_precedence(tmp_path):
     s = session(tmp_path)
     user = tmp_path / "data" / "agents" / "general-purpose"
@@ -64,6 +83,23 @@ def test_agent_profiles_follow_builtin_user_project_precedence(tmp_path):
     assert review.source == "project"
     assert review.valid is False
     assert review.errors == ("未知工具: Missing",)
+
+
+def test_agent_profile_names_are_case_insensitive_and_ambiguous_peers_are_invalid(tmp_path):
+    s = session(tmp_path)
+    first = tmp_path / ".yucode" / "agents" / "one"
+    second = tmp_path / ".yucode" / "agents" / "two"
+    first.mkdir(parents=True)
+    second.mkdir(parents=True)
+    body = "---\nname: Review\ndescription: 审查\ntools: Read\n---\n检查。\n"
+    (first / "AGENT.md").write_text(body, encoding="utf-8")
+    (second / "AGENT.md").write_text(body.replace("Review", "review"), encoding="utf-8")
+
+    profile = AgentProfileLibrary.load(s).get("REVIEW")
+
+    assert profile is not None
+    assert profile.valid is False
+    assert any("名称歧义" in error for error in profile.errors)
 
 
 def test_subagent_runtime_settings_have_bounded_defaults_and_config_overrides():

@@ -10,6 +10,7 @@ from yucode.tools.base import Tool
 
 class MCPTool(Tool):
     NAME = "MCP"
+    CHILD_SAFE = True
     DESCRIPTION = "Call/describe external MCP server tools, and list/read MCP resources"
     MUTATES = True
 

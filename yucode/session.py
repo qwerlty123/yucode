@@ -14,7 +14,7 @@ import subprocess
 import threading
 import time
 import uuid
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, ClassVar, cast
@@ -1053,6 +1053,10 @@ class Session:
     memory: ProjectMemory | None = field(default=None, repr=False)
     tool_catalog: ToolCatalog | None = field(default=None, repr=False)
     subagents: SubagentRuntime | None = field(default=None, repr=False)
+    subagent_task_id: str = field(default="", repr=False)
+    subagent_interaction_available: bool = field(default=False, repr=False)
+    subagent_interaction_handler: Callable[[Json], str] | None = field(default=None, repr=False)
+    authorization_settings: RuntimeSettings | None = field(default=None, repr=False)
     system_prompt: str = ""
     snapshot_path: str = field(default="", repr=False)
     images: ImageInputs = field(init=False, repr=False)

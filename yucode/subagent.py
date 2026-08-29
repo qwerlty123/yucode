@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import copy
+import hashlib
 import json
 import os
 import queue
@@ -14,7 +15,7 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass, field, replace
 
 from yucode.agent_profile import AgentProfile, AgentProfileLibrary
-from yucode.base import Json, ToolError
+from yucode.base import DISMISSED, Json, Text, ToolError
 from yucode.engine import Agent, AgentOutcome
 from yucode.session import Session, SessionSnapshotStore, local_timestamp
 
@@ -247,6 +248,98 @@ class SubagentEvent:
     text: str = ""
 
 
+@dataclass
+class _InteractionWaiter:
+    event: threading.Event = field(default_factory=threading.Event)
+    response: str = ""
+
+
+class InteractionBroker:
+    """把子 Agent 的 Ask 和工具审批转换为可持久化、可校验的请求。"""
+
+    def __init__(self, runtime: SubagentRuntime):
+        self.runtime = runtime
+        self._waiters: dict[str, _InteractionWaiter] = {}
+
+    def request(self, task_id: str, kind: str, payload: Json) -> str:
+        if kind not in {"ask", "approval"}:
+            raise ToolError("子 Agent 交互类型必须是 ask 或 approval")
+        normalized = Text.value(payload)
+        encoded = json.dumps(normalized, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        request_id = "interaction-" + uuid.uuid4().hex[:12]
+        digest = hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+        waiter = _InteractionWaiter()
+        with self.runtime._lock:
+            task = self.runtime._require(task_id)
+            if task.status != "running":
+                raise ToolError(f"任务 {task_id} 当前不能发起交互: {task.status}")
+            request = {
+                "request_id": request_id,
+                "digest": digest,
+                "kind": kind,
+                "tool_name": str(normalized.get("tool_name") or ("Ask" if kind == "ask" else "")),
+                "arguments": normalized.get("arguments") or {},
+                "cwd": str(normalized.get("cwd") or (task.child.cwd if task.child else self.runtime.root.cwd)),
+                "preview": str(normalized.get("preview") or ""),
+                "question": str(normalized.get("question") or ""),
+                "choices": list(normalized.get("choices") or []),
+                "status": "pending",
+                "created_at": local_timestamp(),
+            }
+            task.pending_interaction = request
+            task.status = "waiting_interaction"
+            self._waiters[request_id] = waiter
+            self.runtime._persist(task, "interaction_requested")
+            handler = self.runtime.root.subagent_interaction_handler if not task.run_in_background else None
+            channel_available = self.runtime.root.subagent_interaction_available
+
+        if handler is not None:
+            try:
+                response = str(handler(dict(request)))
+            except Exception as error:  # noqa: BLE001 - 交互 UI 故障按拒绝处理，不能悬挂 worker
+                response = "n" if kind == "approval" else DISMISSED
+                with self.runtime._lock:
+                    task.warnings.append("交互处理失败: " + (str(error).strip() or error.__class__.__name__))
+            self.respond(task_id, request_id, digest, response)
+        elif not channel_available:
+            self.respond(task_id, request_id, digest, "n" if kind == "approval" else DISMISSED)
+
+        while not waiter.event.wait(0.1):
+            with self.runtime._lock:
+                task = self.runtime._require(task_id)
+                if task.cancel_event.is_set() or task.status in AgentTaskView.TERMINAL:
+                    self._answer_locked(task, request_id, "n" if kind == "approval" else DISMISSED, "cancelled")
+        return waiter.response
+
+    def respond(self, task_id: str, request_id: str, digest: str, response: str) -> AgentTaskView:
+        with self.runtime._lock:
+            task = self.runtime._require(task_id)
+            pending = task.pending_interaction
+            if pending.get("request_id") != request_id:
+                raise ToolError("交互 request_id 已失效或不匹配")
+            if pending.get("digest") != digest:
+                raise ToolError("交互 digest 不匹配")
+            if pending.get("status") != "pending":
+                return task.view()
+            self._answer_locked(task, request_id, Text.clean(response), "answered")
+            return task.view()
+
+    def _answer_locked(self, task: _TaskRecord, request_id: str, response: str, status: str) -> None:
+        waiter = self._waiters.get(request_id)
+        pending = dict(task.pending_interaction)
+        pending["status"] = status
+        pending["answered_at"] = local_timestamp()
+        pending["response"] = Text.clean(response)[:1000]
+        task.pending_interaction = pending
+        if task.status == "waiting_interaction":
+            task.status = "running"
+        self.runtime._persist(task, "interaction_" + status)
+        if waiter is not None:
+            waiter.response = response
+            waiter.event.set()
+            self._waiters.pop(request_id, None)
+
+
 class SubagentRuntime:
     """子 Agent 的唯一外部 seam；调用方不直接管理线程、会话或磁盘记录。"""
 
@@ -261,6 +354,7 @@ class SubagentRuntime:
         self._lock = threading.RLock()
         self._changed = threading.Condition(self._lock)
         self.events: queue.Queue[SubagentEvent] = queue.Queue()
+        self.interactions = InteractionBroker(self)
         self._slots = threading.BoundedSemaphore(root.settings.max_parallel_agents)
         self._closing = False
         self._tasks = self.store.load()
@@ -414,6 +508,14 @@ class SubagentRuntime:
                 self._finish(task, "cancelled", "stopped")
             return task.view()
 
+    def stop_all(self) -> list[AgentTaskView]:
+        with self._lock:
+            task_ids = [task.task_id for task in self._tasks.values() if task.status in self.ACTIVE]
+        return [self.stop(task_id) for task_id in task_ids]
+
+    def respond_interaction(self, task_id: str, request_id: str, digest: str, response: str) -> AgentTaskView:
+        return self.interactions.respond(task_id, request_id, digest, response)
+
     def claim_notifications(self) -> list[AgentTaskView]:
         """领取待注入的后台终态；未确认前重复领取会返回相同任务。"""
 
@@ -455,6 +557,17 @@ class SubagentRuntime:
                 events.append(self.events.get_nowait())
             except queue.Empty:
                 return events
+
+    @staticmethod
+    def notification_message(task: AgentTaskView) -> Json:
+        """生成不可由子 Agent 正文伪造的根会话完成通知。"""
+
+        envelope = task.to_json()
+        return {
+            "role": "user",
+            "content": "--- SUBAGENT COMPLETION ---\n" + json.dumps(envelope, ensure_ascii=False, sort_keys=True),
+            "_session_event": "subagent_completion",
+        }
 
     def resume(self, task_id: str, message: str) -> AgentTaskView:
         message = message.strip()
@@ -597,7 +710,8 @@ class SubagentRuntime:
         max_steps = task.profile.max_steps or self.root.settings.max_subagent_steps
         settings = replace(self.root.settings, max_steps=max_steps, quick_hints=False)
         assert self.root.tool_catalog is not None
-        allowed = task.profile.tool_names(self.root.tool_catalog.names, self.HARD_DENY)
+        child_safe = tuple(tool.NAME for tool in self.root.tool_catalog if tool.CHILD_SAFE)
+        allowed = task.profile.tool_names(child_safe, self.HARD_DENY)
         catalog = self.root.tool_catalog.filtered(allow=allowed, deny=self.HARD_DENY)
         transcript = self.store.transcript_path(task.task_id, task.attempt)
         if task.attempt > 1:
@@ -619,6 +733,8 @@ class SubagentRuntime:
                 tool_catalog=catalog,
                 uid=task.task_id,
             )
+        child.subagent_task_id = task.task_id
+        child.authorization_settings = self.root.settings
         child.system_prompt = self._system_prompt(task)
         child.snapshot_path = transcript
         return child
@@ -628,9 +744,32 @@ class SubagentRuntime:
         with self._lock:
             task = self._require(task_id)
         agent = Agent(child, input_fn=lambda _prompt: "n", output_fn=lambda text: self._activity(task, str(text)))
+        agent.tools.confirmation_fn = lambda call, _tool, preview: self._confirm(task, call.name, call.args, preview)
+        agent.tools.question_fn = lambda spec, position: self.interactions.request(
+            task.task_id,
+            "ask",
+            {
+                "tool_name": "Ask",
+                "question": spec.question,
+                "choices": list(spec.choices or ()),
+                "previews": list(spec.previews or ()),
+                "recommended": spec.recommended,
+                "position": position,
+                "cwd": child.cwd,
+            },
+        )
         with self._lock:
             task.agent = agent
         return agent.run_outcome(prompt)
+
+    def _confirm(self, task: _TaskRecord, tool_name: str, arguments: list, preview: str) -> tuple[bool, str]:
+        answer = self.interactions.request(
+            task.task_id,
+            "approval",
+            {"tool_name": tool_name, "arguments": arguments, "cwd": task.child.cwd if task.child else self.root.cwd, "preview": preview},
+        ).strip()
+        lower = answer.lower()
+        return (True, "") if lower in {"", "y", "yes"} else (False, "" if lower in {"n", "no"} else answer)
 
     def _activity(self, task: _TaskRecord, text: str) -> None:
         text = " ".join(text.split())
@@ -679,7 +818,13 @@ class SubagentRuntime:
                     task.stop_reason = "restart"
                     task.finished_at = local_timestamp()
                     task.delivery_state = "pending" if task.run_in_background else "none"
-                    task.pending_interaction = {}
+                    if task.pending_interaction:
+                        task.pending_interaction = {
+                            **task.pending_interaction,
+                            "status": "invalid",
+                            "invalid_reason": "restart",
+                            "invalidated_at": local_timestamp(),
+                        }
                     self._persist(task, "interrupted")
                 elif task.delivery_state == "delivered":
                     task.delivery_state = "pending"

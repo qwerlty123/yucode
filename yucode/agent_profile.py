@@ -61,12 +61,19 @@ class AgentProfileLibrary:
         for root, source in roots:
             if not os.path.isdir(root):
                 continue
+            source_seen: dict[str, AgentProfile] = {}
             for entry in sorted(os.listdir(root)):
                 path = os.path.join(root, entry, "AGENT.md")
                 if not os.path.isfile(path):
                     continue
                 profile = cls.parse(path, entry, source, session)
-                profiles[profile.name.casefold()] = profile
+                key = profile.name.casefold()
+                previous = source_seen.get(key)
+                if previous is not None:
+                    paths = ", ".join(filter(None, (previous.path, profile.path)))
+                    profile = replace(profile, errors=(*profile.errors, f"同一层级存在大小写不敏感的名称歧义: {paths}"))
+                source_seen[key] = profile
+                profiles[key] = profile
         return cls(profiles)
 
     @staticmethod

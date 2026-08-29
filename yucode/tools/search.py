@@ -21,6 +21,7 @@ from yucode.tools.files import ReadTool
 
 class SearchTool(Tool):
     NAME = "Search"
+    CHILD_SAFE = True
     DESCRIPTION = "Search UTF-8 text files with case-insensitive regex; skips binary/hidden/gitignored files and returns path anchor=line:hash matches."
     EXAMPLE = (
         'Search source with context. Example: {"pattern":"class .*Tool","path":"src","glob":"*.py","context":2}',
@@ -420,6 +421,7 @@ class CodeIndex:
 class InspectCodeTool(Tool):
     _WHITESPACE_RE: ClassVar[re.Pattern] = re.compile(r"\s")
     NAME = "InspectCode"
+    CHILD_SAFE = True
     MAX_LIMIT: ClassVar[int] = 80
     MAX_OUTLINE_LIMIT: ClassVar[int] = 1000
     MAX_DEPTH: ClassVar[int] = 5

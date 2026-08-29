@@ -19,6 +19,7 @@ from yucode.tools.base import Tool
 
 class ReadTool(Tool):
     NAME = "Read"
+    CHILD_SAFE = True
     MAX_ANCHOR_DRIFT: ClassVar[int] = 50
     _ANCHOR_RE: ClassVar[re.Pattern] = re.compile(r"(\d+):([0-9a-z]{5}|[0-9a-f]{8})")
     DESCRIPTION = (
@@ -163,6 +164,7 @@ class ReadTool(Tool):
 
 class ViewImageTool(Tool):
     NAME = "ViewImage"
+    CHILD_SAFE = True
     DESCRIPTION = (
         "View one local image as visual model input. Supports PNG, JPEG, WebP, and single-frame GIF; paths outside the workspace require confirmation."
     )
@@ -241,6 +243,7 @@ class EditTool(Tool):
     """
 
     NAME = "Edit"
+    CHILD_SAFE = True
     DESCRIPTION = "Create or patch one UTF-8 file; op=create makes a new file; Edit start/end anchors are inclusive."
     EXAMPLE = (
         'create file. Example: {"path":"src/app.py","edits":[{"op":"create","content":"print(1)\\n"}]}',

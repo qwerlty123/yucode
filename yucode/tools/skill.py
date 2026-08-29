@@ -10,6 +10,7 @@ from yucode.tools.base import Tool
 
 class SkillTool(Tool):
     NAME = "Skill"
+    CHILD_SAFE = True
     DESCRIPTION = (
         "Load a skill's full instructions by name (skills are listed in the SKILLS section). "
         "Follow the returned steps, running any bundled scripts it references via Bash."

@@ -21,6 +21,7 @@ class AskSpec:
 
 class AskTool(Tool):
     NAME = "Ask"
+    CHILD_SAFE = True
     DESCRIPTION = (
         "Ask the user one or more questions (asked in sequence) and wait for their answers. "
         "Use when intent is genuinely ambiguous, a choice affects the codebase's external shape (module layout, public API, naming), or you need prioritization; "

@@ -6,6 +6,7 @@ import contextlib
 import json
 import os
 import re
+import threading
 import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -27,6 +28,7 @@ from yucode.context import ContextManager
 from yucode.session import Session, TurnDiff
 from yucode.tools import (
     TOOL_CATALOG,
+    AgentTool,
     AskSpec,
     AskTool,
     BashTool,
@@ -246,15 +248,24 @@ class ToolRunner:
         self.context = context
         self.input_fn = input_fn
         self.output_fn = output_fn
-        self.catalog = session.tool_catalog or TOOL_CATALOG
+        self.catalog = getattr(session, "tool_catalog", None) or TOOL_CATALOG
         self.live_output: Callable[[str, str], None] | None = None
         self.live_start: Callable[[], None] | None = None
         self.question_fn: Callable[[AskSpec, str], str] | None = None
+        self.confirmation_fn: Callable[[ToolCall, Tool, str], tuple[bool, str]] | None = None
         self._active_bash: ActiveResource[BashTool] = ActiveResource()  # 跟踪当前活跃的 Bash,取消时用
+        self._active_subagents: set[str] = set()
+        self._active_subagents_lock = threading.Lock()
 
     def cancel(self) -> None:
         # 只取消当前正在运行的 Bash 工具;其余工具要么瞬时完成,要么已由各自的调用方处理。
         self._active_bash.apply(lambda tool: tool.cancel())
+        with self._active_subagents_lock:
+            task_ids = tuple(self._active_subagents)
+        runtime = getattr(self.session, "subagents", None)
+        if runtime is not None:
+            for task_id in task_ids:
+                runtime.stop(task_id)
 
     def call_tool(self, tool: Tool, planned_edit: EditBatchPlan.PlannedEdit | None = None) -> str:
         if not isinstance(tool, BashTool):
@@ -282,6 +293,13 @@ class ToolRunner:
                 messages.append(self.builtin_echo_message(calls[index]))
                 index += 1
                 continue
+            if calls[index].name == "Agent":
+                end = index
+                while end < len(calls) and calls[end].name == "Agent":
+                    end += 1
+                messages.extend(self.run_agents(calls[index:end], batch_suffix, state))
+                index = end
+                continue
             # 优先切"并发安全"的连续段;满足并发条件就整段并行执行。
             end = self.parallel_segment_end(calls, index)
             if end - index >= 2 and self.session.settings.max_parallel_tools > 1:
@@ -293,6 +311,49 @@ class ToolRunner:
             messages.extend(self.run_serial(calls[index:end], batch_suffix, state, observations))
             index = end
         return [*messages, *observations]  # 消息在前、观察在后:保证可回放
+
+    def run_agents(self, calls: list[ToolCall], batch_suffix: str, state: dict[str, bool]) -> list[Json]:
+        """先启动同一连续段的全部子 Agent，再按模型调用顺序收集结果。"""
+
+        launched: list[tuple[AgentTool | None, object | None, str, float]] = []
+        for call in calls:
+            started = time.monotonic()
+            try:
+                if call.error:
+                    raise ToolError(call.error)
+                tool = AgentTool(self.session, call.args)
+                view = tool.launch()
+                launched.append((tool, view, "", started))
+                with self._active_subagents_lock:
+                    if not view.run_in_background:
+                        self._active_subagents.add(view.task_id)
+            except Exception as error:  # noqa: BLE001 - 每个启动失败仍须生成自己的工具结果
+                launched.append((None, None, str(error).strip() or error.__class__.__name__, started))
+
+        messages: list[Json] = []
+        for call, (tool, view, error, started) in zip(calls, launched):
+            suffix = batch_suffix if state["first"] else ""
+            state["first"] = False
+            d = ToolDisplay(batch_suffix=suffix, display=self.short_call(call))
+            if error or tool is None or view is None:
+                content = self.reject(call, "ToolError: " + error, d=d)
+            else:
+                try:
+                    completed = tool.collect(view)
+                    content = self.finish(call, tool.render(completed), elapsed=time.monotonic() - started, d=d)
+                except Exception as collect_error:  # noqa: BLE001 - 等待失败也要闭合该 tool call
+                    content = self.finish(
+                        call,
+                        "ToolError: " + (str(collect_error).strip() or collect_error.__class__.__name__),
+                        failed=True,
+                        elapsed=time.monotonic() - started,
+                        d=d,
+                    )
+                finally:
+                    with self._active_subagents_lock:
+                        self._active_subagents.discard(view.task_id)
+            messages.append({"role": "tool", "tool_call_id": call.id, "content": content})
+        return messages
 
     def builtin_echo_message(self, call: ToolCall) -> Json:
         """应答 provider 自己的 builtin 函数:把它的参数原样返回。
@@ -449,7 +510,8 @@ class ToolRunner:
             if plan_error:
                 raise ToolError(plan_error)  # 规划阶段的错误(如 stale anchor)在这里统一走拒绝路径
             needs_confirmation = tool.needs_confirmation()
-            if needs_confirmation and self.session.settings.yolo:
+            authorization = getattr(self.session, "authorization_settings", None) or self.session.settings
+            if needs_confirmation and authorization.yolo:
                 d.auto = True
                 pre = self.approval_display(call, tool, "auto", batch_suffix=batch_suffix, planned_edit=planned_edit)
                 # "auto ..." 头部会与结果行重复;只有当它带有结果行不会重复的预览(例如
@@ -557,7 +619,10 @@ class ToolRunner:
 
     def confirm(self, call: ToolCall, tool: Tool, batch_suffix: str = "", planned_edit: EditBatchPlan.PlannedEdit | None = None) -> tuple[bool, str]:
         # 确认对话框:空回车/yes 批准;no 拒绝;其他输入视为"拒绝并给出理由"(理由会传给模型)。
-        self.output_fn(self.approval_display(call, tool, "confirm", batch_suffix=batch_suffix, planned_edit=planned_edit))
+        display = self.approval_display(call, tool, "confirm", batch_suffix=batch_suffix, planned_edit=planned_edit)
+        self.output_fn(display)
+        if self.confirmation_fn is not None:
+            return self.confirmation_fn(call, tool, str(display))
         answer = self.input_fn(LogBlock.prefix(2, LogEdge.CONTINUE) + "[Y/n or reason] ").strip()
         lower = answer.lower()
         if lower in {"", "y", "yes"}:

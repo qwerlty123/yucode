@@ -117,6 +117,7 @@ class Agent:
         self.session.state.turn_step = 0  # 步数在下面循环里每次迭代 +1
         tool_batches = 0  # 本回合已执行的工具批次数,用于给后续批次加后缀区分
         malformed_tool_names: list[str] = []  # 跨纠正轮次累计文本化调用名,超限即报错
+        claimed_notification_ids: list[str] = []
         user_message = self.session.images.message(user_input)
         user_text = self.session.images.label_text(user_message)
         turn_messages: list[Json] = [user_message]
@@ -141,13 +142,15 @@ class Agent:
                     try:
                         self.raise_if_cancelled()
                         request = self.prepare_request(turn_messages)
+                        claimed_notification_ids = [task_id for task_id, _message in request.notifications]
                         assistant, tool_calls, content = self.model.request(request.messages, request.tools)
                         self.record_sources(assistant)  # 每次请求都可能附带 provider 搜索来源
                         self.raise_if_cancelled()  # 请求完成后复查取消,避免在发出纠正前被取消
                         # 请求已送达 provider,因此它的跟进消息从这里起归属历史,之后发出的任何
                         # 纠正都落在它们后面——历史必须保持 provider 看到的顺序,因为已发送的
                         # 消息永远无法收回。
-                        self.accept_pending_inputs(turn_messages, request.pending)
+                        self.accept_pending_inputs(turn_messages, request.pending, request.notifications)
+                        claimed_notification_ids = []
                         assistant, tool_calls, content = self.correct_textual_tool_calls(
                             assistant,
                             tool_calls,
@@ -159,6 +162,9 @@ class Agent:
                         )
                         break
                     except ModelRequestRetry:
+                        if claimed_notification_ids and self.session.subagents is not None:
+                            self.session.subagents.release_notifications(claimed_notification_ids)
+                            claimed_notification_ids = []
                         continue  # 可重试错误:不落地任何消息,换用同一批消息重发
                 if assistant.get(PAUSED_TURN_KEY) and not tool_calls:
                     # provider 暂停了一个长时间运行的服务端工具,而不是结束回合。恢复的方式是
@@ -194,6 +200,8 @@ class Agent:
             self.stop_reason = "max_steps"
             return stopped  # max_steps 耗尽:正常结束,但用户看到的是"被停止"而不是答案
         except KeyboardInterrupt:
+            if claimed_notification_ids and self.session.subagents is not None:
+                self.session.subagents.release_notifications(claimed_notification_ids)
             self.stop_reason = "cancelled"
             # 用户取消(含跨线程取消):释放排队输入,把被打断的回合按规矩 settle 掉。
             self.session.release_user_inputs()
@@ -201,6 +209,8 @@ class Agent:
             self.session.save_snapshot()
             raise  # 重新抛出,让上层打印 "Cancelled"
         except Exception:
+            if claimed_notification_ids and self.session.subagents is not None:
+                self.session.subagents.release_notifications(claimed_notification_ids)
             self.stop_reason = "error"
             # 兜底:把 active-turn 缓冲刷进历史再落盘,保证已发生的对话不因异常丢失。
             self.session.release_user_inputs()
@@ -330,13 +340,22 @@ class Agent:
 
     def prepare_request(self, turn_messages: list[Json]) -> PreparedRequest:
         pending = self.session.claim_user_inputs()  # 认领排队输入:此后只有本请求负责确认它们
+        notifications: tuple[tuple[str, Json], ...] = ()
+        if self.session.subagents is not None and not self.session.subagent_task_id:
+            claimed = self.session.subagents.claim_notifications()
+            notifications = tuple((task.task_id, self.session.subagents.notification_message(task)) for task in claimed)
         # 排队的跟进消息带 LIVE_FOLLOWUP_PREFIX 前缀拼进请求,让模型知道它们是实时跟进。
-        request_turn = [*turn_messages, *(item.message(LIVE_FOLLOWUP_PREFIX) for item in pending)]
-        self.session.state.turn_messages = len(request_turn)
-        tools = Tool.resolved_schemas(self.session)  # 每次请求都解析最新工具 schema(可能被 /strict 等改动)
-        messages = self.context.prepare_messages(self.model, self.session.system_prompt or SYSTEM_PROMPT, request_turn, tools)
-        self.context.update_percent(messages, tools)  # 更新上下文占用百分比供状态栏显示
-        return PreparedRequest(messages, tools, pending)
+        request_turn = [*turn_messages, *(message for _task_id, message in notifications), *(item.message(LIVE_FOLLOWUP_PREFIX) for item in pending)]
+        try:
+            self.session.state.turn_messages = len(request_turn)
+            tools = Tool.resolved_schemas(self.session)  # 每次请求都解析最新工具 schema(可能被 /strict 等改动)
+            messages = self.context.prepare_messages(self.model, self.session.system_prompt or SYSTEM_PROMPT, request_turn, tools)
+            self.context.update_percent(messages, tools)  # 更新上下文占用百分比供状态栏显示
+            return PreparedRequest(messages, tools, pending, notifications)
+        except Exception:
+            if notifications and self.session.subagents is not None:
+                self.session.subagents.release_notifications([task_id for task_id, _message in notifications])
+            raise
 
     @classmethod
     def textual_tool_call(cls, content: str, tools: list[Json]) -> str | None:
@@ -408,9 +427,18 @@ class Agent:
         sequence = ", then ".join(names)
         return MalformedToolCallError(f"Model emitted tool calls as text {count} times ({sequence}); none of the textual calls were executed.")
 
-    def accept_pending_inputs(self, turn_messages: list[Json], pending: list[QueuedInput]) -> None:
+    def accept_pending_inputs(
+        self,
+        turn_messages: list[Json],
+        pending: list[QueuedInput],
+        notifications: tuple[tuple[str, Json], ...] = (),
+    ) -> None:
+        if notifications:
+            turn_messages.extend(message for _task_id, message in notifications)
+            if self.session.subagents is not None:
+                self.session.subagents.acknowledge_notifications([task_id for task_id, _message in notifications])
         if not pending:
-            return  # 没有排队输入就无事可做
+            return  # 没有排队输入就不再处理普通跟进
         texts = [item.text for item in pending]
         # 按"发给 provider 时带的前缀"落库,而不是裸文本:这里丢掉前缀等于改写已在缓存前缀
         # 里的消息,还会让模型对这条消息的应答失去解释。

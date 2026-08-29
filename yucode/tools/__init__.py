@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from yucode.tools.agent import AgentTaskTool, AgentTool
 from yucode.tools.ask import AskSpec, AskTool
 from yucode.tools.base import Tool
 from yucode.tools.catalog import ToolCatalog
@@ -13,6 +14,8 @@ from yucode.tools.shell import BashTool, JobTool
 from yucode.tools.skill import SkillTool
 
 TOOLS: tuple[type[Tool], ...] = (
+    AgentTool,
+    AgentTaskTool,
     MCPTool,
     SkillTool,
     ReadTool,
@@ -36,6 +39,8 @@ __all__ = [
     "TOOLS",
     "TOOL_CATALOG",
     "TOOL_REGISTRY",
+    "AgentTaskTool",
+    "AgentTool",
     "AskSpec",
     "AskTool",
     "BashTool",

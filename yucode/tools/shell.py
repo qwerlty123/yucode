@@ -36,6 +36,7 @@ class BashTool(Tool):
     """
 
     NAME = "Bash"
+    CHILD_SAFE = True
     _DEV_NULL_REDIRECT_RE: ClassVar[re.Pattern] = re.compile(r"(?:\d*>>?|&>|<)\s*/dev/null(?![\w./])")
     _BACKGROUND_AMP_RE: ClassVar[re.Pattern] = re.compile(r"(?<!&)&(?!&)")
     _CONTROL_OPERATOR_RE: ClassVar[re.Pattern] = re.compile(r"&&|\|\||[|;\n]")
@@ -379,6 +380,7 @@ class BashTool(Tool):
 
 class JobTool(Tool):
     NAME = "Job"
+    CHILD_SAFE = True
     DESCRIPTION = "Start, monitor, wait for, list, and kill background shell jobs. Processes run in their own process group and do not block the agent."
     MUTATES = True
     ACTIONS: ClassVar[tuple[str, ...]] = ("start", "status", "wait", "list", "kill")

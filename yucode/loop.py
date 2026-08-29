@@ -333,6 +333,8 @@ Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall, Note, Ask, MCP, S
             self.input_history = FileHistory(history_path)  # prompt_toolkit 的历史后端
         else:
             self.input_history = None  # 非交互路径没有历史记录
+        self.session.subagent_interaction_available = self.interactive_input
+        self.session.subagent_interaction_handler = self.subagent_interaction if self.interactive_input else None
         self.input_completer = CommandCompleter(
             providers=lambda: tuple(sorted(self.session.config.providers)),
             models=lambda: self.session.config.provider.available_models,
@@ -354,6 +356,25 @@ Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall, Note, Ask, MCP, S
         self.agent.tools.live_start = self.tool_live_start  # Bash 实时预览启动
         self.agent.tools.live_output = self.tool_live_output  # Bash 实时输出
         self.agent.tools.question_fn = self.question_interaction  # Ask 提问
+
+    def subagent_interaction(self, request: Json) -> str:
+        """在前台子 Agent 阻塞期间把持久化请求接到根 TUI 的交互控件。"""
+
+        if request.get("kind") == "ask":
+            choices = request.get("choices")
+            previews = request.get("previews")
+            recommended = request.get("recommended")
+            spec = AskSpec(
+                str(request.get("question") or ""),
+                [str(item) for item in choices] if isinstance(choices, list) else None,
+                [str(item) for item in previews] if isinstance(previews, list) else None,
+                int(recommended) if isinstance(recommended, int) and not isinstance(recommended, bool) else None,
+            )
+            return self.question_interaction(spec, str(request.get("position") or ""))
+        preview = str(request.get("preview") or "").strip()
+        if preview:
+            self.emit(preview)
+        return self.tool_input(LogBlock.prefix(2, LogEdge.CONTINUE) + "[Y/n or reason] ")
 
     def automatic_compaction_status(self, active: bool) -> None:
         """把自动上下文压缩(compaction)显示为当前回合的一个独立阶段。"""

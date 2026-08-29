@@ -14,6 +14,7 @@ from yucode.tools.base import Tool
 
 class RecallTool(Tool):
     NAME = "Recall"
+    CHILD_SAFE = True
     _KEY_RE: ClassVar[re.Pattern] = re.compile(r"tr\.\d+")
     DESCRIPTION = "Recall stored non-Recall tool results by tr.N key; ranges slice output lines to control context."
     STORES_RESULT = False
@@ -90,6 +91,7 @@ class RecallTool(Tool):
 
 class RecallContextTool(Tool):
     NAME = "RecallContext"
+    CHILD_SAFE = True
     _KEY_RE: ClassVar[re.Pattern] = re.compile(r"seg\.\d+")
     DESCRIPTION = "List compacted history segments, retrieve them by seg.N key, or regex-search their titles and text; query alternation A|B|C is allowed."
     DEFAULT_LIMIT = 20
@@ -380,6 +382,7 @@ class MemoryTool(Tool):
 
 class NoteTool(Tool):
     NAME = "Note"
+    CHILD_SAFE = True
     DESCRIPTION = (
         "View or update durable working notes; "
         "set_goal, replace_plan, and set_check replace current values, append_known appends, replace_known replaces all known facts. "
