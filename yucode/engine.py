@@ -6,6 +6,7 @@ import json
 import re
 import threading
 from collections.abc import Callable
+from dataclasses import dataclass
 
 from yucode.base import (
     PAUSED_TURN_KEY,
@@ -46,6 +47,17 @@ _BLOCKQUOTE_RE = re.compile(r" {0,3}>")
 MAX_TEXTUAL_TOOL_CORRECTIONS = 5
 
 
+@dataclass(frozen=True)
+class AgentOutcome:
+    """供运行时消费的结构化回合结果；根会话仍可继续使用字符串接口。"""
+
+    status: str
+    stop_reason: str
+    result: str = ""
+    partial_result: str = ""
+    error: str = ""
+
+
 class Agent:
     """运行一个用户回合直到给出最终答案,负责组装 context、model 与 tools。
 
@@ -69,6 +81,7 @@ class Agent:
         self.memory_consolidator = MemoryConsolidator(memory) if memory is not None else None
         self.output_fn = output_fn
         self.cancel_requested = threading.Event()  # 跨线程取消信号:只在模型/工具调用之间检查
+        self.stop_reason = ""  # 最近一次 run 的结构化结束原因，由 run_outcome 对外收口
         # provider 自带搜索(如内置 web search)在上一回合报告出的来源,按出现顺序存放。
         # UI 把它们渲染在答案下方;回合存储的消息本身保持原样,不加任何来源信息。
         self.turn_sources: list[Json] = []
@@ -96,6 +109,7 @@ class Agent:
 
     def run(self, user_input: str | UserInput) -> str:
         # —— 回合开始:重置每回合状态 ——
+        self.stop_reason = ""
         self.cancel_requested.clear()  # 上一回合可能留下取消信号,必须清掉
         self.turn_sources = []  # 本回合内 provider 搜索来源从零收集
         self.session.clear_quick_hints()  # 新回合使上一回合给出的 quick hints 全部失效
@@ -160,9 +174,12 @@ class Agent:
                         raise ModelError("empty final response")  # 空答案视为模型故障,不落库
                     answer = content.strip()
                     self.finish_turn(turn_messages, self.assistant_turn_message(assistant, [], answer))
+                    self.stop_reason = "completed"
                     return answer  # 唯一正常出口:模型不再调用工具,回合结束
                 if content.strip() and self.terminal_next_hints(tool_calls):
-                    return self.finish_with_next_hints(turn_messages, assistant, tool_calls, content, tool_batches)
+                    answer = self.finish_with_next_hints(turn_messages, assistant, tool_calls, content, tool_batches)
+                    self.stop_reason = "completed"
+                    return answer
                 assistant = self.assistant_turn_message(assistant, tool_calls, content)
                 turn_messages.append(assistant)
                 if content.strip():
@@ -174,14 +191,17 @@ class Agent:
                 self.checkpoint_turn(turn_messages)
             stopped = f"Stopped after max_agent_steps={self.session.settings.max_steps}"
             self.finish_turn(turn_messages, {"role": "assistant", "content": stopped})
+            self.stop_reason = "max_steps"
             return stopped  # max_steps 耗尽:正常结束,但用户看到的是"被停止"而不是答案
         except KeyboardInterrupt:
+            self.stop_reason = "cancelled"
             # 用户取消(含跨线程取消):释放排队输入,把被打断的回合按规矩 settle 掉。
             self.session.release_user_inputs()
             self.settle_interrupted_turn(turn_messages)
             self.session.save_snapshot()
             raise  # 重新抛出,让上层打印 "Cancelled"
         except Exception:
+            self.stop_reason = "error"
             # 兜底:把 active-turn 缓冲刷进历史再落盘,保证已发生的对话不因异常丢失。
             self.session.release_user_inputs()
             self.session.messages.extend(self.session._active_turn_messages)
@@ -189,6 +209,19 @@ class Agent:
             self.session.state.turn_messages = 0
             self.session.save_snapshot()
             raise
+
+    def run_outcome(self, user_input: str | UserInput) -> AgentOutcome:
+        """运行一回合并把所有出口收敛成子运行时可持久化的结果。"""
+
+        try:
+            result = self.run(user_input)
+        except KeyboardInterrupt:
+            return AgentOutcome("cancelled", self.stop_reason or "cancelled")
+        except Exception as error:  # noqa: BLE001 - 子运行时需要把任意模型/工具故障变成任务事实
+            message = Text.clean(str(error)).strip() or error.__class__.__name__
+            return AgentOutcome("failed", self.stop_reason or "error", error=message)
+        reason = self.stop_reason or "completed"
+        return AgentOutcome("failed" if reason == "max_steps" else "completed", reason, result)
 
     def correct_textual_tool_calls(
         self,
@@ -301,7 +334,7 @@ class Agent:
         request_turn = [*turn_messages, *(item.message(LIVE_FOLLOWUP_PREFIX) for item in pending)]
         self.session.state.turn_messages = len(request_turn)
         tools = Tool.resolved_schemas(self.session)  # 每次请求都解析最新工具 schema(可能被 /strict 等改动)
-        messages = self.context.prepare_messages(self.model, SYSTEM_PROMPT, request_turn, tools)
+        messages = self.context.prepare_messages(self.model, self.session.system_prompt or SYSTEM_PROMPT, request_turn, tools)
         self.context.update_percent(messages, tools)  # 更新上下文占用百分比供状态栏显示
         return PreparedRequest(messages, tools, pending)
 

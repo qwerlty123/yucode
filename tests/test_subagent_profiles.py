@@ -3,6 +3,7 @@ from agent_harness import call, session
 from yucode.agent_profile import AgentProfileLibrary
 from yucode.base import RuntimeSettings
 from yucode.context import ContextManager
+from yucode.model import ModelClient
 from yucode.runner import ToolRunner
 from yucode.tools import ReadTool, Tool, ToolCatalog
 
@@ -16,6 +17,23 @@ def test_session_tool_catalog_is_the_schema_and_execution_authority(tmp_path):
 
     assert names == {"Read"}
     assert "unknown tool Bash" in result[0]["content"]
+
+
+def test_model_argument_parser_uses_the_same_session_catalog(tmp_path):
+    s = session(tmp_path)
+    s.tool_catalog = ToolCatalog((ReadTool,))
+    client = ModelClient(s)
+    message = {
+        "tool_calls": [
+            {"id": "1", "function": {"name": "Bash", "arguments": '{"command":"pwd"}'}},
+            {"id": "2", "function": {"name": "Read", "arguments": '{"path":"a.txt"}'}},
+        ]
+    }
+
+    calls = client.tool_calls(message)
+
+    assert calls[0].args == [{"command": "pwd"}]
+    assert calls[1].args == [{"path": "a.txt", "ranges": [[0, 0]]}]
 
 
 def test_agent_profiles_follow_builtin_user_project_precedence(tmp_path):

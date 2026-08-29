@@ -39,6 +39,7 @@ if TYPE_CHECKING:
     from yucode.mcp import MCPManager
     from yucode.memory import ProjectMemory
     from yucode.skill import SkillLibrary
+    from yucode.subagent import SubagentRuntime
     from yucode.tools import ToolCatalog
 
 
@@ -514,7 +515,7 @@ class SessionSnapshotStore:
     def save(self) -> str:
         if not self.session._snapshot_saved and not SessionSnapshotCodec.has_content(self.session):
             return ""  # 从未保存且无内容:跳过落盘
-        path = self.session_path(self.session.config.data_dir, self.session.cwd, self.session.uid)
+        path = self.session.snapshot_path or self.session_path(self.session.config.data_dir, self.session.cwd, self.session.uid)
         os.makedirs(os.path.dirname(path), exist_ok=True)  # 项目目录按需创建
         blobs: dict[str, str] = {}
         if not self.session._snapshot_saved:
@@ -525,8 +526,9 @@ class SessionSnapshotStore:
         self.write_blobs(path, blobs)  # blob 行先于引用它们的记录写入
         self.write_jsonl(path, record, mode="a")
         self.session._snapshot_saved = SessionSnapshotCodec.marker(self.session)  # 更新标记,下一次才能算 delta
-        self.write_latest(self.session.config.data_dir, self.session.cwd, self.session.uid)
-        self.write_meta()
+        if not self.session.snapshot_path:
+            self.write_latest(self.session.config.data_dir, self.session.cwd, self.session.uid)
+            self.write_meta()
         self.garbage_collect_assets()  # 顺手清理已无引用的图片资产
         return self.session.uid
 
@@ -777,6 +779,13 @@ class SessionSnapshotStore:
         path = cls.find_session_path(config.data_dir, uid)
         if not path:
             raise YucodeError(f"Session snapshot not found: {uid} under {cls.path_for(config.data_dir, cls.PROJECTS_DIR)}")
+        return cls.load_path(path, config=config, settings=settings, cwd=cwd)
+
+    @classmethod
+    def load_path(cls, path: str, *, config: Config, settings: RuntimeSettings, cwd: str = "") -> Session:
+        """从已解析的 JSONL 路径恢复会话；子 Agent 用它继续自己的 sidechain。"""
+
+        cwd = cwd or os.getcwd()
         data, blobs, header = cls.read_merged(path)  # 合并完整快照与所有 delta
         tool_records = SessionSnapshotCodec.tool_records(data.get("tool_records", []))
         raw_created_at = data.get("created_at", header.get("created_at"))  # 老日志没有 created_at 时退回头部
@@ -800,10 +809,11 @@ class SessionSnapshotStore:
             turn_diffs=SessionSnapshotCodec.turn_diffs(data.get("turn_diffs", []), blobs),
             history=SessionSnapshotCodec.history(data.get("history", []), blobs),
             pending_user_inputs=[item for value in data.get("pending_user_inputs", []) if (item := QueuedInput.from_json(value)) is not None],
-            uid=data.get("uid", uid),
+            uid=data.get("uid", header.get("uid", os.path.basename(path).removesuffix(".jsonl"))),
             resumed=True,
             created_at=created_at,
             context_layout_version=int(data.get("context_layout_version", 1) or 1),
+            snapshot_path=path,
         )
         # 在追加持久化生命周期/检查点事件之前标记已加载的前缀,
         # 这样下一次快照把它们作为只追加的 delta 写入。
@@ -1042,6 +1052,9 @@ class Session:
     skills: SkillLibrary | None = None
     memory: ProjectMemory | None = field(default=None, repr=False)
     tool_catalog: ToolCatalog | None = field(default=None, repr=False)
+    subagents: SubagentRuntime | None = field(default=None, repr=False)
+    system_prompt: str = ""
+    snapshot_path: str = field(default="", repr=False)
     images: ImageInputs = field(init=False, repr=False)
     _gitignore_cache: dict[str, tuple[int, list[str]]] = field(default_factory=dict)  # (mtime, 规则) 缓存,避免重复解析 .gitignore
     uid: str = ""

@@ -60,6 +60,8 @@ if TYPE_CHECKING:
     from anthropic import Anthropic
     from openai import OpenAI
 
+    from yucode.tools import ToolCatalog
+
 from yucode.session import QueuedInput, Session
 from yucode.tools import (
     TOOL_REGISTRY,
@@ -1434,12 +1436,13 @@ class ModelClient:
             except json.JSONDecodeError:
                 calls.append(ToolCall(id=call_id, name=name, args=[]))  # 参数损坏:记为空参数调用,由模型自纠
                 continue
-            calls.append(self.tool_call(call_id, name, payload))
+            calls.append(self.tool_call(call_id, name, payload, catalog=self.session.tool_catalog))
         return calls
 
     @classmethod
-    def tool_payload(cls, name: str, payload: object) -> ToolArgs:
-        if isinstance(payload, dict) and (tool := TOOL_REGISTRY.get(name)):
+    def tool_payload(cls, name: str, payload: object, *, catalog: ToolCatalog | None = None) -> ToolArgs:
+        registry = catalog or TOOL_REGISTRY
+        if isinstance(payload, dict) and (tool := registry.get(name)):
             # strict schema 把可选参数表达为可空,因此模型可能对省略的参数显式发送 null。
             # 在 yucode 的所有工具里 null 都表示"缺省",所以直接丢弃。
             cleaned = cls.drop_nulls(payload)
@@ -1456,10 +1459,10 @@ class ModelClient:
         return value
 
     @classmethod
-    def tool_call(cls, call_id: str, name: str, payload: object) -> ToolCall:
+    def tool_call(cls, call_id: str, name: str, payload: object, *, catalog: ToolCatalog | None = None) -> ToolCall:
         # payload_args 可能拒绝畸形参数(如 Bash 的空命令)。把该错误捕获到调用上,
         # 执行时作为工具结果回放给模型自纠,而不是让异常逃逸、中断整个 agent 回合。
         try:
-            return ToolCall(id=call_id, name=name, args=cls.tool_payload(name, payload))
+            return ToolCall(id=call_id, name=name, args=cls.tool_payload(name, payload, catalog=catalog))
         except ToolError as error:  # 只捕获参数校验错误,其他异常照常抛出
             return ToolCall(id=call_id, name=name, args=[], error=str(error))

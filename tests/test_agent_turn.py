@@ -20,7 +20,7 @@ from yucode.base import (
     ToolCall,
 )
 from yucode.context import ContextManager
-from yucode.engine import Agent
+from yucode.engine import Agent, AgentOutcome
 from yucode.model import ModelClient
 from yucode.prompts import INTERRUPT_MARKER, LIVE_FOLLOWUP_PREFIX, SYSTEM_PROMPT
 from yucode.runner import ToolRunner
@@ -126,6 +126,25 @@ def test_agent_runs_tool_loop_and_stops_at_max_steps(tmp_path):
     assert limited.state.turn_step == 2
     assert len(limited.tool_records) == 2
     assert limited.messages[-1]["content"] == answer
+
+
+def test_agent_outcome_distinguishes_completion_step_limit_and_cancellation(tmp_path):
+    completed = Agent(session(tmp_path), output_fn=lambda _text: None)
+    completed.run = lambda _input: "完成"  # type: ignore[method-assign]
+    completed.stop_reason = "completed"
+    limited = Agent(session(tmp_path), output_fn=lambda _text: None)
+    limited.run = lambda _input: "达到上限"  # type: ignore[method-assign]
+    limited.stop_reason = "max_steps"
+    cancelled = Agent(session(tmp_path), output_fn=lambda _text: None)
+
+    def cancel(_input):
+        raise KeyboardInterrupt
+
+    cancelled.run = cancel  # type: ignore[method-assign]
+
+    assert completed.run_outcome("执行") == AgentOutcome("completed", "completed", "完成")
+    assert limited.run_outcome("执行") == AgentOutcome("failed", "max_steps", "达到上限")
+    assert cancelled.run_outcome("执行") == AgentOutcome("cancelled", "cancelled")
 
 
 def test_agent_persists_responses_output_on_final_assistant_message(tmp_path):
