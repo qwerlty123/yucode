@@ -77,6 +77,10 @@ yucode 使用工具来检查你的项目并对其执行操作。你描述想要�
     <div class="term-shot" role="img" aria-label="Ask 提示：先显示问题，然后是一个列出两个选项的选择器，推荐项已预选，并为高亮选项提供预览行。"><span class="fs-user">用哪种方案？</span><span> </span><span>选择：</span><span class="fs-dim">  j/k 移动，/ 搜索，Esc/q 返回/取消</span><span class="fs-sel">&gt;  1. 重构 <span class="fs-i fs-add">(推荐)</span></span><span class="fs-dim">   2. 重写</span><span class="fs-dim">  │ 提取模块 +87 -12</span></div>
 
     按 `Esc` 可拒绝回答该问题；不选择而直接输入，则以自由文本作答。
+* - **`Agent`**
+  - 把一个自包含任务委派给独立子 Agent。支持 foreground/background、fresh/fork、shared/worktree 和当前 provider 内的模型覆盖；同一批多个调用先全部启动，再按原 tool-call 顺序返回。后台任务先返回 task id，完成结果只在根 Agent 的安全请求边界投递一次。完整规则见[子 Agent 功能](subagent-design.md)。
+* - **`AgentTask`**
+  - 由根 Agent 列出、查看、等待、引导、停止、恢复或关闭子 Agent 任务。子 Agent 的工具目录中不存在 `Agent` 和 `AgentTask`，因此不能嵌套委派。
 * - **`NextHints`**
   - 提供 2–3 条模型在回答之后建议的简短下一步提示。它们以可选中的 chip 形式出现在空闲提示符处；`Tab` 切换焦点，`Enter` 提交，`/hints` 可将其关闭。全部为 `NextHints` 的一批调用会在单次模型调用中结束当前回合。
 

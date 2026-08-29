@@ -127,6 +127,10 @@ yucode 报告不支持的条目,请与你的 provider 的示例对比。
 | `shell_timeout` | `60` | shell 命令的最大存活时长(秒) |
 | `bash_wait_timeout` | `10` | 运行中的命令转为后台任务前的等待时长;`0` 禁用提升 |
 | `max_parallel_tools` | `4` | 并发执行的只读工具调用上限;`1` 禁用并行 |
+| `max_parallel_agents` | `4` | 同时执行的子 Agent worker 上限 |
+| `max_queued_agents` | `16` | worker 槽满后允许排队的子 Agent 上限;`0` 表示立即拒绝 |
+| `max_subagent_steps` | `80` | profile 未覆盖时单个子 Agent attempt 的工具步骤上限 |
+| `agent_shutdown_grace_seconds` | `2` | 退出时等待子 Agent 释放模型、Job、MCP 和 workspace 的最长秒数 |
 | `session_retention_days` | `7` | 删除这么多天未使用的已保存会话,启动时在后台清扫;`0` 表示永久保留 |
 | `theme` | `auto` | 终端主题:`auto`、`light` 或 `dark`;可被 `--theme` 覆盖 |
 

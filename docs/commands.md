@@ -97,6 +97,29 @@ provider(参见 [配置](configuration.md#providers)),并可交互式选择;带�
 
 <div class="term-shot" role="img" aria-label="The running divider briefly changes from working to retrying while preserving its green waiting pulse and elapsed timer, then returns to working as the replacement model request continues."><span class="fs-divider">──── <span class="fs-i fs-add">●</span> working (11s) ────────────────────</span><span class="fs-prompt">+&gt; /resend</span><span class="fs-divider">──── <span class="fs-i fs-add">●</span> retrying (12s) ──────────────────</span><span class="fs-divider">──── <span class="fs-i fs-add">●</span> working (14s) ────────────────────</span></div>
 
+## 子 Agent
+
+**`/agents`** —— 在交互终端打开 Tasks/Library 管理器;非交互模式下输出任务和
+profile 列表。Tasks 标签显示状态、profile、耗时、token、当前活动、结果、
+worktree 和待处理交互;Library 标签管理用户级和项目级 profile,内置项只读。
+
+| 用法 | 效果 |
+|---|---|
+| `/agents run <profile> [--background] [--worktree\|--shared] [--fresh\|--fork] [--model MODEL] -- <prompt>` | 启动任务 |
+| `/agents list` | 列出任务和 profile |
+| `/agents show <task-id>` | 查看任务、attempt、结果和 workspace |
+| `/agents wait <task-id> [seconds]` | 最多等待 120 秒，直到状态变化或终态 |
+| `/agents steer <task-id> -- <message>` | 给运行中的任务排队追加消息 |
+| `/agents stop <task-id\|all>` | 幂等停止一个或全部活动任务 |
+| `/agents resume <task-id> -- <message>` | 从 transcript 和原 workspace 创建下一 attempt |
+| `/agents close <task-id>` | 隐藏终态任务，不删除 transcript/worktree |
+| `/agents clean <task-id>` | 经确认删除保留的 worktree 和临时分支 |
+| `/agents reload` | 重新加载 Agent profile；运行中任务继续使用启动快照 |
+
+前台子 Agent 执行时按 `Ctrl+B` 可转为后台而不中断。后台任务需要 Ask 或工具审批
+时会进入 `waiting_interaction`;从 `/agents` 的 Tasks 标签处理。详细语义和 profile
+格式见[子 Agent 功能](subagent-design.md)。
+
 ## MCP
 
 **`/mcp`** —— 管理 [MCP](mcp.md) 服务器连接。子命令:

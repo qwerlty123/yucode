@@ -43,6 +43,7 @@ Working through a repository task in an interactive session.
 | **[交互](usage.md)** | 追问、流式输出、按键——你如何驱动 agent。 |
 | **[命令](commands.md)** | `/` 命令参考：status、models、sessions、MCP。 |
 | **[工具](tools.md)** | 读取、搜索、浏览代码；编辑文件；运行命令；后台任务；可选的 provider 侧网页搜索。 |
+| **[子 Agent](subagent-design.md)** | 前台/后台委派、任务控制、profiles、审批、shared/worktree 与恢复。 |
 | **[会话](usage.md#sessions)** | 你的工作会被保存、命名，可通过 `/sessions`、`-c` 或 `--resume` 恢复。 |
 | **[MCP](mcp.md)** | 连接外部的 Model Context Protocol 服务器并使用其工具。 |
 | **[技能](skills.md)** | 按需加载可复用的指令包。 |
@@ -67,5 +68,6 @@ tools
 configuration
 mcp
 skills
+subagent-design
+subagent-source-research
 ```
-
