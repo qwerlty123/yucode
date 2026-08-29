@@ -41,6 +41,7 @@ if TYPE_CHECKING:
     from yucode.skill import SkillLibrary
     from yucode.subagent import SubagentRuntime
     from yucode.tools import ToolCatalog
+    from yucode.workspace import WorkspaceLease
 
 
 CONTEXT_LAYOUT_VERSION = 2  # 上下文布局版本:升级时触发一次性的状态检查点迁移
@@ -1042,6 +1043,7 @@ class Session:
     pending_user_inputs: list[QueuedInput] = field(default_factory=list)
     quick_hints: tuple[str, ...] = field(default_factory=tuple)  # 瞬时的下一步输入建议;从不序列化,每轮清空
     tool_counter: int = 0
+    executed_tool_calls: int = 0  # 当前进程内实际执行/拒绝的调用数，子 Agent 终态统计使用
     turn_diffs: list[TurnDiff] = field(default_factory=list)
     history: list[HistorySegment] = field(default_factory=list)
     jobs: dict[str, BackgroundJob] = field(default_factory=dict)
@@ -1057,6 +1059,8 @@ class Session:
     subagent_interaction_available: bool = field(default=False, repr=False)
     subagent_interaction_handler: Callable[[Json], str] | None = field(default=None, repr=False)
     authorization_settings: RuntimeSettings | None = field(default=None, repr=False)
+    workspace_lease: WorkspaceLease | None = field(default=None, repr=False)
+    workspace_owner: str = field(default="root", repr=False)
     system_prompt: str = ""
     snapshot_path: str = field(default="", repr=False)
     images: ImageInputs = field(init=False, repr=False)
@@ -1095,6 +1099,10 @@ class Session:
             from yucode.tools import TOOL_CATALOG
 
             self.tool_catalog = TOOL_CATALOG
+        if self.workspace_lease is None:
+            from yucode.workspace import WorkspaceLease
+
+            self.workspace_lease = WorkspaceLease()
 
     def store_turn_diff(
         self,

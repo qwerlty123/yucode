@@ -18,6 +18,7 @@ from yucode.agent_profile import AgentProfile, AgentProfileLibrary
 from yucode.base import DISMISSED, Json, Text, ToolError
 from yucode.engine import Agent, AgentOutcome
 from yucode.session import Session, SessionSnapshotStore, local_timestamp
+from yucode.workspace import WorktreeManager
 
 
 @dataclass(frozen=True)
@@ -355,6 +356,7 @@ class SubagentRuntime:
         self._changed = threading.Condition(self._lock)
         self.events: queue.Queue[SubagentEvent] = queue.Queue()
         self.interactions = InteractionBroker(self)
+        self.worktrees = WorktreeManager(root)
         self._slots = threading.BoundedSemaphore(root.settings.max_parallel_agents)
         self._closing = False
         self._tasks = self.store.load()
@@ -608,7 +610,7 @@ class SubagentRuntime:
             task.thread = thread
             thread.start()
             launched = task.view()
-        return launched if task.run_in_background else self.wait(task_id)
+        return launched if task.run_in_background else self.wait_foreground(task_id)
 
     def close_task(self, task_id: str) -> AgentTaskView:
         with self._lock:
@@ -618,6 +620,21 @@ class SubagentRuntime:
             task.status = "closed"
             task.delivery_state = "consumed"
             self._persist(task, "closed")
+            return task.view()
+
+    def clean_task(self, task_id: str, *, confirmed: bool = False) -> AgentTaskView:
+        with self._lock:
+            task = self._require(task_id)
+            if task.status in self.ACTIVE:
+                raise ToolError("运行中的任务不能 clean")
+            if task.isolation != "worktree":
+                raise ToolError("shared 任务没有可清理的 worktree")
+            if task.workspace.get("cleanup_state") != "cleaned" and not confirmed:
+                raise ToolError("删除保留的 worktree 成果需要显式确认")
+            task.workspace = self.worktrees.clean(task.workspace)
+            self._persist(task, "workspace_cleaned")
+            if task.workspace.get("cleanup_state") == "cleanup_failed":
+                raise ToolError("worktree 清理失败: " + str(task.workspace.get("cleanup_error") or "未知错误"))
             return task.view()
 
     def close(self) -> None:
@@ -642,6 +659,7 @@ class SubagentRuntime:
 
     def _run_task(self, task: _TaskRecord) -> None:
         acquired = False
+        writer_acquired = False
         terminal_status = "failed"
         terminal_reason = "error"
         terminal_result = ""
@@ -653,6 +671,14 @@ class SubagentRuntime:
                 acquired = self._slots.acquire(timeout=0.1)
                 if acquired:
                     break
+            if task.isolation == "worktree":
+                workspace = self.worktrees.prepare(task.task_id, task.workspace)
+            else:
+                workspace = {"mode": "shared", "path": self.root.cwd, "cleanup_state": "not_applicable"}
+                if self._needs_workspace_writer(task):
+                    assert self.root.workspace_lease is not None
+                    self.root.workspace_lease.acquire(task.task_id, wait=True, cancelled=task.cancel_event)
+                    writer_acquired = True
             with self._lock:
                 if task.cancel_event.is_set() or self._closing:
                     if task.status in self.ACTIVE:
@@ -660,6 +686,7 @@ class SubagentRuntime:
                         reason = "stopped" if task.cancel_event.is_set() else "shutdown"
                         self._finish(task, status, reason)
                     return
+                task.workspace = workspace
                 task.status = "running"
                 task.started_at = local_timestamp()
                 task.started_monotonic = time.monotonic()
@@ -693,6 +720,9 @@ class SubagentRuntime:
             if timer is not None:
                 timer.cancel()
             self._cleanup_child(task)
+            self._finalize_workspace(task)
+            if writer_acquired and self.root.workspace_lease is not None:
+                self.root.workspace_lease.release(task.task_id)
             with self._lock:
                 if task.status in self.ACTIVE:
                     task.result = terminal_result
@@ -714,17 +744,18 @@ class SubagentRuntime:
         allowed = task.profile.tool_names(child_safe, self.HARD_DENY)
         catalog = self.root.tool_catalog.filtered(allow=allowed, deny=self.HARD_DENY)
         transcript = self.store.transcript_path(task.task_id, task.attempt)
+        cwd = str(task.workspace.get("path") or self.root.cwd)
         if task.attempt > 1:
             if not os.path.isfile(transcript):
                 raise ToolError(f"任务 {task.task_id} 缺少 transcript，无法恢复")
-            child = SessionSnapshotStore.load_path(transcript, config=config, settings=settings, cwd=self.root.cwd)
+            child = SessionSnapshotStore.load_path(transcript, config=config, settings=settings, cwd=cwd)
             child.skills = self.root.skills
             child.memory = self.root.memory
             child.tool_catalog = catalog
         else:
             messages = copy.deepcopy(self.root.messages) if task.context == "fork" else []
             child = Session(
-                cwd=self.root.cwd,
+                cwd=cwd,
                 config=config,
                 settings=settings,
                 messages=self._complete_messages(messages),
@@ -735,6 +766,9 @@ class SubagentRuntime:
             )
         child.subagent_task_id = task.task_id
         child.authorization_settings = self.root.settings
+        child.workspace_owner = task.task_id
+        if task.isolation == "shared":
+            child.workspace_lease = self.root.workspace_lease
         child.system_prompt = self._system_prompt(task)
         child.snapshot_path = transcript
         return child
@@ -807,8 +841,25 @@ class SubagentRuntime:
 
     def _collect_metrics(self, task: _TaskRecord, child: Session) -> None:
         task.steps = child.state.turn_step
-        task.tool_calls = child.tool_counter
+        task.tool_calls = child.executed_tool_calls
         task.usage = asdict(child.usage)
+        if task.isolation == "shared":
+            task.changed_files = list(dict.fromkeys(diff.path for diff in child.turn_diffs if diff.path))
+
+    def _needs_workspace_writer(self, task: _TaskRecord) -> bool:
+        assert self.root.tool_catalog is not None
+        child_safe = tuple(tool.NAME for tool in self.root.tool_catalog if tool.CHILD_SAFE)
+        allowed = set(task.profile.tool_names(child_safe, self.HARD_DENY))
+        return any(tool.NAME in allowed and tool.WORKSPACE_MUTATES for tool in self.root.tool_catalog)
+
+    def _finalize_workspace(self, task: _TaskRecord) -> None:
+        if task.isolation != "worktree" or not task.workspace:
+            return
+        workspace, changed_files, warnings = self.worktrees.finalize(task.workspace)
+        with self._lock:
+            task.workspace = workspace
+            task.changed_files = changed_files
+            task.warnings = list(dict.fromkeys([*task.warnings, *warnings]))
 
     def _recover_interrupted_tasks(self) -> None:
         with self._lock:

@@ -299,7 +299,7 @@ class ImageInputs:
         session = self._session()
         from yucode.session import SessionSnapshotStore
 
-        path = SessionSnapshotStore.session_path(session.config.data_dir, session.cwd, session.uid)
+        path = session.snapshot_path or SessionSnapshotStore.session_path(session.config.data_dir, session.cwd, session.uid)
         return path[: -len(".jsonl")] + ".assets"
 
     @staticmethod

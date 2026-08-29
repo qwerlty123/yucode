@@ -268,13 +268,21 @@ class ToolRunner:
                 runtime.stop(task_id)
 
     def call_tool(self, tool: Tool, planned_edit: EditBatchPlan.PlannedEdit | None = None) -> str:
-        if not isinstance(tool, BashTool):
-            # Edit 走规划好的写入路径(带校验);其他工具直接执行。
-            return planned_edit.call(tool) if planned_edit and isinstance(tool, EditTool) else tool.call()
-        with self._active_bash.track(tool):  # 登记为活跃 Bash,便于跨线程取消
-            return tool.call()
+        def execute() -> str:
+            if not isinstance(tool, BashTool):
+                # Edit 走规划好的写入路径(带校验);其他工具直接执行。
+                return planned_edit.call(tool) if planned_edit and isinstance(tool, EditTool) else tool.call()
+            with self._active_bash.track(tool):  # 登记为活跃 Bash,便于跨线程取消
+                return tool.call()
+
+        lease = getattr(self.session, "workspace_lease", None)
+        if not tool.WORKSPACE_MUTATES or lease is None:
+            return execute()
+        with lease.hold(getattr(self.session, "workspace_owner", "root"), wait=False):
+            return execute()
 
     def run(self, calls: list[ToolCall], batch_suffix: str = "") -> list[Json]:
+        self.session.executed_tool_calls = getattr(self.session, "executed_tool_calls", 0) + len(calls)
         messages: list[Json] = []
         observations: list[Json] = []
         # 跨分段共享、会被改动的状态:`first` 决定哪个展示携带 batch_suffix;

@@ -244,6 +244,7 @@ class EditTool(Tool):
 
     NAME = "Edit"
     CHILD_SAFE = True
+    WORKSPACE_MUTATES = True
     DESCRIPTION = "Create or patch one UTF-8 file; op=create makes a new file; Edit start/end anchors are inclusive."
     EXAMPLE = (
         'create file. Example: {"path":"src/app.py","edits":[{"op":"create","content":"print(1)\\n"}]}',

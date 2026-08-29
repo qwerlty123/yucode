@@ -36,8 +36,8 @@ def test_agent_tool_fans_out_before_waiting_and_keeps_call_order(tmp_path):
     runner = ToolRunner(root, ContextManager(root), output_fn=lambda _text: None)
     messages = runner.run(
         [
-            call("Agent", [{"description": "甲", "prompt": "一"}]),
-            call("Agent", [{"description": "乙", "prompt": "二"}]),
+            call("Agent", [{"description": "甲", "prompt": "一", "subagent_type": "explore"}]),
+            call("Agent", [{"description": "乙", "prompt": "二", "subagent_type": "explore"}]),
         ]
     )
 
