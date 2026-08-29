@@ -1,0 +1,1 @@
+Fix `search_rank.py`. Case-insensitively tokenize alphanumerics. Rank documents by 3× title token overlap + body overlap, exclude zero-score docs, then sort by descending score and ascending string id without mutating input.

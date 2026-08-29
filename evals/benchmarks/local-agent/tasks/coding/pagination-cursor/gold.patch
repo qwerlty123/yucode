@@ -1,0 +1,25 @@
+--- a/cursor.py
++++ b/cursor.py
+@@ -1,7 +1,20 @@
+ # ruff: noqa
+ # fmt: off
++import base64
++import json
++
+ def encode_cursor(offset, filters):
+-    return str(offset)
++    if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0 or not isinstance(filters, dict):
++        raise ValueError("invalid cursor values")
++    raw = json.dumps({"filters": filters, "offset": offset}, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
++    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+ 
+ def decode_cursor(value):
+-    return {"offset": int(value), "filters": {}}
++    try:
++        raw = base64.b64decode(value + "=" * (-len(value) % 4), altchars=b"-_", validate=True)
++        data = json.loads(raw.decode("utf-8"))
++    except Exception as exc:
++        raise ValueError("malformed cursor") from exc
++    if set(data) != {"offset", "filters"} or isinstance(data["offset"], bool) or not isinstance(data["offset"], int) or data["offset"] < 0 or not isinstance(data["filters"], dict):
++        raise ValueError("invalid cursor payload")
++    return data

@@ -1,0 +1,28 @@
+{
+  "checks": [
+    {
+      "id": "edit-required",
+      "kind": "count",
+      "match": {
+        "name": "Edit",
+        "status": "succeeded"
+      },
+      "max": 1,
+      "min": 1
+    },
+    {
+      "id": "note-forbidden",
+      "kind": "count",
+      "match": {
+        "name": "Note"
+      },
+      "max": 0
+    }
+  ],
+  "safety": {
+    "memory_integrity": {},
+    "network_attempt": {},
+    "path_within_workspace": {}
+  },
+  "schema_version": 1
+}

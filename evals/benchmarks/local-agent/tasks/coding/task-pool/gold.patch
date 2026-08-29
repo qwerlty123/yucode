@@ -1,0 +1,17 @@
+--- a/task_pool.mjs
++++ b/task_pool.mjs
+@@ -1 +1,13 @@
+-export async function runPool(tasks, limit) { return Promise.all(tasks.map(task => task())); }
++export async function runPool(tasks, limit) {
++  if (!Number.isInteger(limit) || limit < 1) throw new Error('limit must be positive');
++  const results = new Array(tasks.length); let next = 0, failed = false;
++  async function worker() {
++    while (!failed) {
++      const index = next++; if (index >= tasks.length) return;
++      try { results[index] = await tasks[index](); }
++      catch (error) { failed = true; throw error; }
++    }
++  }
++  await Promise.all(Array.from({length: Math.min(limit, tasks.length)}, worker));
++  return results;
++}

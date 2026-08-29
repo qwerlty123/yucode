@@ -1,0 +1,1 @@
+Fix `retry_policy.py`. Return the delays before retries: at most `attempts-1`, exponential `base * 2**index`, capped by `cap`, and each delay at least `retry_after` when supplied. Validate arguments; do not sleep or add jitter.

@@ -1,0 +1,1 @@
+Fix `session_migration.py`. Migrate session dictionaries from v1/v2 to v3 without mutation: rename `messages` to `turns`, add `metadata`, rename metadata `cwd` to `workspace`, reject unknown versions, and make v3 migration idempotent.

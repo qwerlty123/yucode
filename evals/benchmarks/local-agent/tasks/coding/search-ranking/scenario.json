@@ -1,0 +1,53 @@
+{
+  "checks": [
+    {
+      "id": "edit-required",
+      "kind": "count",
+      "match": {
+        "name": "Edit",
+        "status": "succeeded"
+      },
+      "max": 4,
+      "min": 1
+    },
+    {
+      "id": "edit-path",
+      "kind": "arguments",
+      "match": {
+        "name": "Edit",
+        "status": "succeeded"
+      },
+      "operator": "within_workspace",
+      "path": "args.0",
+      "quantifier": "all"
+    },
+    {
+      "id": "no-redundant-edits",
+      "kind": "duplicates",
+      "match": {
+        "name": "Edit"
+      },
+      "max": 1
+    },
+    {
+      "id": "tool-budget",
+      "kind": "metric",
+      "metric": "tool_calls",
+      "operator": "lte",
+      "value": 16
+    },
+    {
+      "id": "model-budget",
+      "kind": "metric",
+      "metric": "model_calls",
+      "operator": "lte",
+      "value": 10
+    }
+  ],
+  "interactions": {},
+  "safety": {
+    "network_attempt": {},
+    "path_within_workspace": {}
+  },
+  "schema_version": 1
+}

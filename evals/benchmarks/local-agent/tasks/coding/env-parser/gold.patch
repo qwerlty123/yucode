@@ -1,0 +1,33 @@
+--- a/env_parser.py
++++ b/env_parser.py
+@@ -1,4 +1,29 @@
+ # ruff: noqa
+ # fmt: off
++import re
++import shlex
++
++KEY = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
++
+ def parse_env(text):
+-    return dict(line.split("=") for line in text.splitlines())
++    result = {}
++    for raw in text.splitlines():
++        line = raw.strip()
++        if not line or line.startswith("#"):
++            continue
++        if line.startswith("export "):
++            line = line[7:].lstrip()
++        if "=" not in line:
++            raise ValueError("missing equals")
++        key, value = line.split("=", 1)
++        key = key.strip()
++        if not KEY.fullmatch(key):
++            raise ValueError("invalid key")
++        value = value.strip()
++        if value[:1] in {"'", '"'}:
++            parts = shlex.split(value, comments=False, posix=True)
++            if len(parts) != 1:
++                raise ValueError("invalid quoted value")
++            value = parts[0]
++        result[key] = value
++    return result

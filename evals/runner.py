@@ -17,8 +17,10 @@ from typing import Any
 from yucode import __version__ as yucode_version
 
 from .adapters import AgentAdapter, AgentOutcome
+from .checks import SafetyContext, evaluate_safety, snapshot_safety_state
 from .executors import Executor, GradeOutcome
 from .models import (
+    CheckOutcome,
     EvidenceManifest,
     FailureReason,
     RunRecord,
@@ -34,6 +36,7 @@ from .report import write_report
 from .schema import SuiteSpec, TaskSpec, catalog_digest, evaluate_applicability
 from .store import AttemptLease, RunStore
 from .trace import TraceRecorder, build_evidence_manifest, package_versions, sha256_bytes, sha256_file, sha256_tree, write_evidence
+from .trajectory import evaluate_scenario, load_scenario, load_trajectory
 
 
 def utc_now() -> str:
@@ -141,6 +144,58 @@ def atomic_write_text(path: Path, value: str) -> None:
     finally:
         if temporary.exists():
             temporary.unlink()
+
+
+def validate_baselines(
+    suite: SuiteSpec,
+    executor: Executor,
+    output_dir: Path,
+    *,
+    tasks: tuple[TaskSpec, ...] | None = None,
+) -> dict[str, str]:
+    """Validate base-fails/gold-passes contracts without invoking an Agent."""
+
+    errors: dict[str, str] = {}
+    selected = suite.tasks if tasks is None else tasks
+    for task in selected:
+        if not task.grader.base_must_fail and task.grader.gold_patch is None:
+            continue
+        try:
+            if task.grader.base_must_fail:
+                artifact_dir = output_dir / "baseline_checks" / task.id
+                artifact_dir.mkdir(parents=True, exist_ok=True)
+                with tempfile.TemporaryDirectory(prefix="yucode-eval-base-") as temporary:
+                    workspace = Path(temporary) / "workspace"
+                    prepare_source(task, workspace)
+                    outcome = executor.grade(
+                        task,
+                        workspace=workspace,
+                        artifact_dir=artifact_dir,
+                        timeout_seconds=suite.defaults.grader_timeout_seconds,
+                    )
+                if outcome.passed:
+                    errors[task.id] = "invalid benchmark: hidden grader passes on the unchanged baseline"
+                elif outcome.timed_out:
+                    errors[task.id] = outcome.error or "baseline grader timed out"
+            if task.id in errors or task.grader.gold_patch is None:
+                continue
+            artifact_dir = output_dir / "gold_checks" / task.id
+            artifact_dir.mkdir(parents=True, exist_ok=True)
+            with tempfile.TemporaryDirectory(prefix="yucode-eval-gold-") as temporary:
+                workspace = Path(temporary) / "workspace"
+                prepare_source(task, workspace)
+                apply_patch(workspace, task.grader.gold_patch.read_text(encoding="utf-8"))
+                outcome = executor.grade(
+                    task,
+                    workspace=workspace,
+                    artifact_dir=artifact_dir,
+                    timeout_seconds=suite.defaults.grader_timeout_seconds,
+                )
+            if not outcome.passed:
+                errors[task.id] = outcome.error or "invalid benchmark: gold patch does not pass the hidden grader"
+        except Exception as exc:  # noqa: BLE001 - every task must report its own invalid contract
+            errors[task.id] = f"benchmark validation failed: {exc}"
+    return errors
 
 
 class EvaluationRunner:
@@ -328,46 +383,7 @@ class EvaluationRunner:
         store.update_experiment_metadata(self.experiment_id, metadata)
 
     def _validate_baselines(self) -> dict[str, str]:
-        errors: dict[str, str] = {}
-        for task in self.tasks:
-            if not task.grader.base_must_fail and task.grader.gold_patch is None:
-                continue
-            try:
-                if task.grader.base_must_fail:
-                    artifact_dir = self.output_dir / "baseline_checks" / task.id
-                    artifact_dir.mkdir(parents=True, exist_ok=True)
-                    with tempfile.TemporaryDirectory(prefix="yucode-eval-base-") as temporary:
-                        workspace = Path(temporary) / "workspace"
-                        prepare_source(task, workspace)
-                        outcome = self.executor.grade(
-                            task,
-                            workspace=workspace,
-                            artifact_dir=artifact_dir,
-                            timeout_seconds=self.suite.defaults.grader_timeout_seconds,
-                        )
-                    if outcome.passed:
-                        errors[task.id] = "invalid benchmark: hidden grader passes on the unchanged baseline"
-                    elif outcome.timed_out:
-                        errors[task.id] = outcome.error or "baseline grader timed out"
-                if task.id in errors or task.grader.gold_patch is None:
-                    continue
-                artifact_dir = self.output_dir / "gold_checks" / task.id
-                artifact_dir.mkdir(parents=True, exist_ok=True)
-                with tempfile.TemporaryDirectory(prefix="yucode-eval-gold-") as temporary:
-                    workspace = Path(temporary) / "workspace"
-                    prepare_source(task, workspace)
-                    apply_patch(workspace, task.grader.gold_patch.read_text(encoding="utf-8"))
-                    outcome = self.executor.grade(
-                        task,
-                        workspace=workspace,
-                        artifact_dir=artifact_dir,
-                        timeout_seconds=self.suite.defaults.grader_timeout_seconds,
-                    )
-                if not outcome.passed:
-                    errors[task.id] = outcome.error or "invalid benchmark: gold patch does not pass the hidden grader"
-            except Exception as exc:  # noqa: BLE001 - turn setup failures into task-level infra results
-                errors[task.id] = f"benchmark validation failed: {exc}"
-        return errors
+        return validate_baselines(self.suite, self.executor, self.output_dir, tasks=self.tasks)
 
     def _run_one(
         self,
@@ -447,6 +463,28 @@ class EvaluationRunner:
                 secrets,
                 store,
             )
+        if patch_checkpoint:
+            required_checkpoint_artifacts = [run_dir / "agent-checkpoint.json", run_dir / "worker.json"]
+            if task.scenario_path is not None:
+                required_checkpoint_artifacts.extend([run_dir / "checks.json", run_dir / "trajectory.jsonl"])
+            missing_checkpoint_artifacts = [path.name for path in required_checkpoint_artifacts if not path.is_file()]
+            if missing_checkpoint_artifacts:
+                message = "resume checkpoint is missing agent or trajectory/check artifacts: " + ", ".join(sorted(missing_checkpoint_artifacts))
+                trace.emit("infrastructure.failure", subject="eval_harness", stage=lease.stage, payload={"error": message})
+                return self._v2_infra_record(
+                    task,
+                    lease,
+                    run_dir,
+                    started_at,
+                    started,
+                    subject,
+                    message,
+                    trace,
+                    task_adapter,
+                    secrets,
+                    store,
+                    patch_bytes=patch_path.stat().st_size,
+                )
 
         source_revision: str | None = None
         image: str | None = task.environment.image
@@ -455,11 +493,14 @@ class EvaluationRunner:
         grade_outcome: GradeOutcome | None = None
         patch = ""
         expected_artifact_exists = False
+        check_results: tuple[CheckOutcome, ...] = ()
+        trajectory_digest: str | None = None
         resume_from_patch = lease.stage in {"patch_captured", "grader_running", "evidence_sealed"} and patch_path.is_file()
         try:
             with tempfile.TemporaryDirectory(prefix="yucode-eval-run-") as temporary:
                 temporary_path = Path(temporary)
                 trace.roots.update({"temporary": temporary_path, "run": run_dir})
+                scenario_spec = load_scenario(task.scenario_path)
                 if resume_from_patch:
                     patch = patch_path.read_text(encoding="utf-8")
                     worker_metrics: dict[str, Any] = {}
@@ -481,6 +522,15 @@ class EvaluationRunner:
                         error=str(checkpoint["error"]) if checkpoint.get("error") else None,
                         metrics=worker_metrics,
                     )
+                    checks_path = run_dir / "checks.json"
+                    if checks_path.is_file():
+                        value = json.loads(checks_path.read_text(encoding="utf-8"))
+                        raw_results = value.get("results", []) if isinstance(value, dict) else []
+                        if not isinstance(raw_results, list):
+                            raise TypeError("checks.json results must be an array")
+                        check_results = tuple(CheckOutcome(**item) for item in raw_results if isinstance(item, dict))
+                    trajectory_path = run_dir / "trajectory.jsonl"
+                    trajectory_digest = sha256_file(trajectory_path) if trajectory_path.is_file() else None
                     trace.emit(
                         "attempt.resumed",
                         subject="eval_harness",
@@ -500,6 +550,7 @@ class EvaluationRunner:
                         payload={"revision": source_revision},
                     )
                     baseline = _run_git(["rev-parse", "HEAD"], cwd=agent_workspace).stdout.strip()
+                    before_state = snapshot_safety_state(scenario_spec.safety, agent_workspace)
                     prompt = task.prompt_path.read_text(encoding="utf-8")
                     store.stage(lease.id, "agent_running")
                     trace.emit(
@@ -540,6 +591,49 @@ class EvaluationRunner:
                     expected_artifact_exists = bool(task.expected_artifact and (agent_workspace / task.expected_artifact).exists())
                     _baseline, patch = capture_patch(agent_workspace, baseline)
                     atomic_write_text(patch_path, patch)
+                    trajectory_path = run_dir / "trajectory.jsonl"
+                    trajectory_events = load_trajectory(trajectory_path)
+                    trajectory_digest = sha256_file(trajectory_path) if trajectory_path.is_file() else None
+                    worker_metrics = outcome.metrics
+                    usage_for_checks = worker_metrics.get("usage", {})
+                    if not isinstance(usage_for_checks, dict):
+                        usage_for_checks = {}
+                    worker_metrics["estimated_cost_usd"] = task_adapter.estimate_cost(usage_for_checks)
+                    scenario_results = evaluate_scenario(
+                        scenario_spec,
+                        trajectory_events,
+                        workspace=agent_workspace,
+                        answer=str(worker_metrics.get("answer") or ""),
+                        metrics={**worker_metrics, "total_tokens": int(usage_for_checks.get("total_tokens", 0))},
+                    )
+                    raw_interactions = worker_metrics.get("interaction_checks", [])
+                    if not isinstance(raw_interactions, list):
+                        raise TypeError("worker interaction_checks must be an array")
+                    interaction_results = tuple(CheckOutcome(**item) for item in raw_interactions if isinstance(item, dict))
+                    after_state = snapshot_safety_state(scenario_spec.safety, agent_workspace)
+                    session_path = run_dir / "session.jsonl"
+                    agent_log_path = run_dir / "agent.log"
+                    safety_results = evaluate_safety(
+                        task.safety_checks,
+                        scenario_spec.safety,
+                        SafetyContext(
+                            workspace=agent_workspace,
+                            run_dir=run_dir,
+                            events=trajectory_events,
+                            answer=str(worker_metrics.get("answer") or ""),
+                            patch=patch,
+                            session_text=session_path.read_text(encoding="utf-8") if session_path.is_file() else "",
+                            agent_log=agent_log_path.read_text(encoding="utf-8") if agent_log_path.is_file() else "",
+                            before_state=before_state,
+                            after_state=after_state,
+                            metrics=worker_metrics,
+                        ),
+                    )
+                    check_results = (*scenario_results, *interaction_results, *safety_results)
+                    write_json(
+                        run_dir / "checks.json",
+                        {"schema_version": 1, "passed": all(item.passed for item in check_results), "results": [asdict(item) for item in check_results]},
+                    )
                     store.stage(lease.id, "patch_captured")
                     trace.emit(
                         "patch.captured",
@@ -604,13 +698,24 @@ class EvaluationRunner:
         usage = UsageMetrics(**{key: value for key, value in usage_data.items() if key in UsageMetrics.__dataclass_fields__})
         usage.estimated_cost_usd = task_adapter.estimate_cost(usage_data)
         max_steps_exhausted = bool(worker_metrics.get("max_steps_exhausted"))
-        within_budget = int(worker_metrics.get("tool_calls", 0)) <= int(task.step_budget or 0) and not max_steps_exhausted
+        budget_results: list[CheckOutcome] = []
+
+        def budget(check_id: str, code: str, actual: int, maximum: int | None) -> None:
+            if maximum is None:
+                return
+            budget_results.append(CheckOutcome(check_id, "budget", "budget", actual <= maximum, code, actual, f"<={maximum}", ("worker.json",)))
+
+        budget("limit.tool_calls", "budget.tool_calls", int(worker_metrics.get("tool_calls", 0)), task.step_budget)
+        budget("limit.model_calls", "budget.model_calls", usage.model_calls, task.limits.max_model_calls)
+        budget("limit.tool_errors", "budget.tool_errors", int(worker_metrics.get("tool_errors", 0)), task.limits.max_tool_errors)
+        budget("limit.total_tokens", "budget.tokens", usage.total_tokens, task.limits.max_total_tokens)
+        check_results = (*check_results, *budget_results)
+        within_budget = all(item.passed for item in budget_results) and not max_steps_exhausted
         normal_stop = agent_outcome.returncode == 0 and not agent_outcome.timed_out and not max_steps_exhausted
-        scenario_checks = worker_metrics.get("scenario_checks", [])
-        scenario_checked = isinstance(scenario_checks, list) and bool(scenario_checks)
-        scenario_passed = bool(worker_metrics.get("scenario_passed", True))
-        protocol_scenario_passed = not task.protocol_checks or scenario_passed
-        safety_passed = not task.safety_checks or (scenario_passed if scenario_checked else int(worker_metrics.get("tool_errors", 0)) == 0)
+        protocol_results = [item for item in check_results if item.domain not in {"safety", "budget"}]
+        safety_results = [item for item in check_results if item.domain == "safety"]
+        protocol_scenario_passed = all(item.passed for item in protocol_results)
+        safety_passed = all(item.passed for item in safety_results)
         scorecard, contract_failures = evaluate_contract(
             within_budget=within_budget,
             verifier_passed=grade_outcome.passed,
@@ -622,30 +727,42 @@ class EvaluationRunner:
                 "budget": ("worker.json",),
                 "verifier": ("grade.json", "grader.log"),
                 "stop": ("worker.json",),
-                "safety": ("worker.json",),
+                "safety": ("checks.json", "trajectory.jsonl"),
             },
         )
         scorecard = replace(
             scorecard,
             protocol="failed" if not protocol_scenario_passed else scorecard.protocol,
-            safety="passed" if task.safety_checks and safety_passed else "failed" if task.safety_checks else "not_checked",
-            conditions={**scorecard.conditions, **({"scenario_checks": scenario_passed} if task.protocol_checks else {})},
+            safety="passed" if safety_results and safety_passed else "failed" if safety_results else "not_checked",
+            conditions={
+                **scorecard.conditions,
+                **({"trajectory_checks": protocol_scenario_passed} if protocol_results else {}),
+                **({"safety_checks": safety_passed} if safety_results else {}),
+            },
             efficiency=(
                 Score("tools", subject, "observed", int(worker_metrics.get("tool_calls", 0)), task.step_budget, ("worker.json",)),
-                Score("tokens", subject, "observed", usage.total_tokens, None, ("worker.json",)),
+                Score("model_calls", subject, "observed", usage.model_calls, task.limits.max_model_calls, ("worker.json",)),
+                Score("tokens", subject, "observed", usage.total_tokens, task.limits.max_total_tokens, ("worker.json",)),
+                Score("cost_usd", subject, "observed", usage.estimated_cost_usd, None, ("worker.json",)),
             ),
         )
-        failures = list(contract_failures)
-        if not protocol_scenario_passed:
-            failures.append(
-                FailureReason.create(
-                    "protocol.scenario",
-                    "agent",
-                    subject,
-                    "a declared interaction or mechanism scenario check failed",
-                    ("worker.json",),
-                )
+        failed_checks = [item for item in check_results if not item.passed]
+        failures = [
+            failure
+            for failure in contract_failures
+            if not (failure.code == "budget.exceeded" and any(item.domain == "budget" for item in failed_checks))
+            and not (failure.code == "safety.violation" and any(item.domain == "safety" for item in failed_checks))
+        ]
+        failures.extend(
+            FailureReason.create(
+                item.code,
+                "agent",
+                "agent_mechanism" if item.domain in {"safety", "trajectory", "protocol"} else subject,
+                f"check {item.id} failed: actual={item.actual!r}, expected={item.expected!r}",
+                item.evidence_refs,
             )
+            for item in failed_checks
+        )
         if agent_outcome.timed_out:
             failures.append(FailureReason.create("agent.timeout", "agent", subject, agent_outcome.error or "agent timed out", ("agent.stderr.log",)))
             execution_status = "timed_out"
@@ -692,12 +809,13 @@ class EvaluationRunner:
             image=image,
             image_digest=image_digest,
             trace_digest=trace_digest,
+            trajectory_digest=trajectory_digest,
         )
         store.stage(lease.id, "evidence_sealed")
         scorecard = replace(scorecard, reproducibility="passed" if manifest.complete else "failed")
         primary = primary_failure(failures)
         record = RunRecord(
-            schema_version=2,
+            schema_version=3,
             experiment_id=self.experiment_id,
             task_id=task.id,
             repetition=repetition,
@@ -728,6 +846,7 @@ class EvaluationRunner:
                 "network": task.environment.network,
                 "release_eligible": task.release_eligible,
                 "artifacts": list(manifest.artifacts),
+                "tool_status_counts": worker_metrics.get("tool_status_counts", {}),
             },
             attempt=lease.attempt,
             execution_status=execution_status,
@@ -744,6 +863,9 @@ class EvaluationRunner:
             trace_path=str(trace.path),
             trace_digest=trace_digest,
             semantic_trace_hash=semantic_hash,
+            trajectory_path=str(run_dir / "trajectory.jsonl") if (run_dir / "trajectory.jsonl").is_file() else None,
+            trajectory_digest=trajectory_digest,
+            check_results=check_results,
         )
         write_json(run_dir / "run.json", record.to_dict())
         return record
@@ -760,6 +882,7 @@ class EvaluationRunner:
         image: str | None,
         image_digest: str | None,
         trace_digest: str,
+        trajectory_digest: str | None = None,
     ) -> EvidenceManifest:
         assert self.suite.catalog is not None
         profile = self.suite.catalog.profiles[task.profile]
@@ -792,6 +915,7 @@ class EvaluationRunner:
                 "tool_schema": sha256_bytes(tool_payload),
                 "docker_image": image_digest,
                 "trace": trace_digest,
+                "trajectory": trajectory_digest,
             },
             agent={**adapter.public_metadata(), "yucode_version": yucode_version},
             environment={
@@ -841,7 +965,7 @@ class EvaluationRunner:
             reproducibility="passed" if manifest.complete else "failed",
         )
         record = RunRecord(
-            schema_version=2,
+            schema_version=3,
             experiment_id=self.experiment_id,
             task_id=task.id,
             repetition=lease.repetition,
@@ -910,7 +1034,7 @@ class EvaluationRunner:
         failure = FailureReason.create("infra.execution", "runner", "eval_harness", error, ("trace.jsonl",))
         scorecard = ScoreCard(reproducibility="passed" if manifest.complete else "failed")
         record = RunRecord(
-            schema_version=2,
+            schema_version=3,
             experiment_id=self.experiment_id,
             task_id=task.id,
             repetition=lease.repetition,

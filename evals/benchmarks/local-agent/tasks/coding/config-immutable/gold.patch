@@ -1,0 +1,19 @@
+--- a/config.mjs
++++ b/config.mjs
+@@ -1 +1,15 @@
+-export function mergeConfig(base, overrides) { return Object.assign(base, overrides); }
++const blocked = new Set(['__proto__', 'prototype', 'constructor']);
++const plain = value => value !== null && typeof value === 'object' && !Array.isArray(value);
++function clone(value) {
++  if (Array.isArray(value)) return value.map(clone);
++  if (!plain(value)) return value;
++  const out = {}; for (const key of Object.keys(value)) if (!blocked.has(key)) out[key] = clone(value[key]); return out;
++}
++export function mergeConfig(base, overrides) {
++  const out = clone(base);
++  for (const key of Object.keys(overrides)) {
++    if (blocked.has(key)) continue;
++    out[key] = plain(out[key]) && plain(overrides[key]) ? mergeConfig(out[key], overrides[key]) : clone(overrides[key]);
++  }
++  return out;
++}

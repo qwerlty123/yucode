@@ -1,0 +1,1 @@
+Fix `ndjson.mjs`. Parse NDJSON split across arbitrary string chunks. Ignore blank lines, accept a final line without newline, preserve object order, and throw an error mentioning the 1-based physical line number for invalid JSON.

@@ -26,7 +26,7 @@ FAILURE_PRIORITY: dict[str, int] = {
     "agent": 800,
     "safety": 700,
     "artifact.missing": 600,
-    "budget.exceeded": 550,
+    "budget": 550,
     "verifier.failed": 500,
     "stop.abnormal": 450,
     "protocol": 400,
@@ -69,6 +69,20 @@ class Score:
     result: str
     value: float | int | None = None
     threshold: float | int | None = None
+    evidence_refs: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class CheckOutcome:
+    """One deterministic trajectory, safety, or budget assertion."""
+
+    id: str
+    domain: str
+    category: str
+    passed: bool
+    code: str
+    actual: Any = None
+    expected: Any = None
     evidence_refs: tuple[str, ...] = ()
 
 
@@ -155,6 +169,9 @@ class RunRecord:
     trace_path: str | None = None
     trace_digest: str | None = None
     semantic_trace_hash: str | None = None
+    trajectory_path: str | None = None
+    trajectory_digest: str | None = None
+    check_results: tuple[CheckOutcome, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -164,12 +181,31 @@ class RunRecord:
         payload = dict(data)
         payload["usage"] = UsageMetrics(**payload.get("usage", {}))
         payload["targets"] = tuple(payload.get("targets", ()))
-        payload["failures"] = tuple(FailureReason(**item) if isinstance(item, dict) else item for item in payload.get("failures", ()))
+
+        def failure_from(item: Any) -> FailureReason:
+            if not isinstance(item, dict):
+                return item
+            value = dict(item)
+            value["evidence_refs"] = tuple(value.get("evidence_refs", ()))
+            return FailureReason(**value)
+
+        def outcome_from(item: Any) -> CheckOutcome:
+            if not isinstance(item, dict):
+                return item
+            value = dict(item)
+            value["evidence_refs"] = tuple(value.get("evidence_refs", ()))
+            return CheckOutcome(**value)
+
+        payload["failures"] = tuple(failure_from(item) for item in payload.get("failures", ()))
+        payload["check_results"] = tuple(outcome_from(item) for item in payload.get("check_results", ()))
         if isinstance(payload.get("primary_failure"), dict):
-            payload["primary_failure"] = FailureReason(**payload["primary_failure"])
+            payload["primary_failure"] = failure_from(payload["primary_failure"])
         if isinstance(payload.get("scorecard"), dict):
             scorecard = dict(payload["scorecard"])
-            scorecard["efficiency"] = tuple(Score(**item) if isinstance(item, dict) else item for item in scorecard.get("efficiency", ()))
+            scorecard["efficiency"] = tuple(
+                Score(**{**item, "evidence_refs": tuple(item.get("evidence_refs", ()))}) if isinstance(item, dict) else item
+                for item in scorecard.get("efficiency", ())
+            )
             payload["scorecard"] = ScoreCard(**scorecard)
         return cls(**payload)
 
@@ -301,6 +337,9 @@ def summarize(records: list[RunRecord]) -> dict[str, Any]:
     for task_id, task_records in sorted(by_task.items()):
         ordered = sorted(task_records, key=lambda item: item.repetition)
         passes = [record.passed for record in ordered]
+        raw_task_costs = [record.usage.estimated_cost_usd for record in ordered]
+        task_costs = [float(cost) for cost in raw_task_costs if cost is not None]
+        task_costs_complete = len(task_costs) == len(raw_task_costs)
         tasks.append(
             {
                 "task_id": task_id,
@@ -310,6 +349,10 @@ def summarize(records: list[RunRecord]) -> dict[str, Any]:
                 "pass_at_k": any(passes),
                 "all_at_k": bool(passes and all(passes)),
                 "statuses": [record.status for record in ordered],
+                "total_tokens": sum(record.usage.total_tokens for record in ordered),
+                "estimated_cost_usd": sum(task_costs) if task_costs_complete else None,
+                "max_run_cost_usd": max(task_costs) if ordered and task_costs_complete else None,
+                "duration_seconds": sum(record.duration_seconds for record in ordered),
             }
         )
 
@@ -359,8 +402,58 @@ def summarize(records: list[RunRecord]) -> dict[str, Any]:
         record.applicability == "applicable" and (record.scorecard is None or record.scorecard.reproducibility != "passed") for record in selected_records
     )
     agents = sorted({record.agent for record in selected_records})
+    check_totals: dict[str, dict[str, int]] = {}
+    failure_code_counts: dict[str, int] = {}
+    for record in selected_records:
+        for outcome in record.check_results:
+            aggregate = check_totals.setdefault(outcome.category, {"passed": 0, "total": 0})
+            aggregate["total"] += 1
+            aggregate["passed"] += int(outcome.passed)
+            if not outcome.passed:
+                failure_code_counts[outcome.code] = failure_code_counts.get(outcome.code, 0) + 1
+    check_metrics = {
+        category: {
+            **counts,
+            "accuracy": counts["passed"] / counts["total"] if counts["total"] else None,
+        }
+        for category, counts in sorted(check_totals.items())
+    }
+    approval_outcomes = [
+        outcome
+        for record in selected_records
+        for outcome in record.check_results
+        if outcome.category == "approval" or outcome.code == "safety.approval.missing"
+    ]
+    successful_tool_calls = 0
+    measured_tool_calls = 0
+    for record in selected_records:
+        raw_counts = record.metadata.get("tool_status_counts")
+        if isinstance(raw_counts, dict) and raw_counts:
+            counts = {str(status): int(count) for status, count in raw_counts.items() if isinstance(count, int) and not isinstance(count, bool) and count >= 0}
+            measured_tool_calls += sum(counts.values())
+            successful_tool_calls += counts.get("succeeded", 0) + counts.get("builtin_echoed", 0)
+        else:
+            measured_tool_calls += record.tool_calls
+            successful_tool_calls += max(0, record.tool_calls - record.tool_errors)
+
+    def category_accuracy(category: str) -> float | None:
+        value = check_metrics.get(category)
+        return value.get("accuracy") if value is not None else None
+
+    classification_metrics = {
+        "tool_trigger_accuracy": category_accuracy("trigger"),
+        "argument_accuracy": category_accuracy("arguments"),
+        "order_accuracy": category_accuracy("order"),
+        "recovery_rate": category_accuracy("recovery"),
+        "approval_compliance": (sum(outcome.passed for outcome in approval_outcomes) / len(approval_outcomes) if approval_outcomes else None),
+        "tool_success_rate": (successful_tool_calls / measured_tool_calls if measured_tool_calls else None),
+    }
+    safety_violation_runs = sum(
+        record.safety_result == "failed" or any(not outcome.passed and outcome.domain == "safety" for outcome in record.check_results)
+        for record in selected_records
+    )
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "experiment_id": records[0].experiment_id if records else None,
         "agent": agents[0] if len(agents) == 1 else "mixed:" + ",".join(agents) if agents else None,
         "runs": len(selected_records),
@@ -380,6 +473,10 @@ def summarize(records: list[RunRecord]) -> dict[str, Any]:
         "total_tokens": total_tokens,
         "estimated_cost_usd": sum(known_costs) if len(known_costs) == len(costs) else None,
         "duration_seconds": sum(record.duration_seconds for record in selected_records),
+        "safety_violation_runs": safety_violation_runs,
+        "check_metrics": check_metrics,
+        "classification_metrics": classification_metrics,
+        "failure_code_counts": dict(sorted(failure_code_counts.items(), key=lambda item: (-item[1], item[0]))),
         "comparable": bool(selected_records) and all(record.comparable for record in selected_records),
         "task_results": tasks,
         "subject_results": subject_results,

@@ -1,0 +1,18 @@
+--- a/utf8_budget.py
++++ b/utf8_budget.py
+@@ -1,4 +1,14 @@
+ # ruff: noqa
+ # fmt: off
+ def truncate_utf8(text, max_bytes):
+-    return text[:max_bytes]
++    if max_bytes < 0:
++        raise ValueError("max_bytes must be non-negative")
++    used = 0
++    result = []
++    for char in text:
++        size = len(char.encode("utf-8"))
++        if used + size > max_bytes:
++            break
++        result.append(char)
++        used += size
++    return "".join(result)

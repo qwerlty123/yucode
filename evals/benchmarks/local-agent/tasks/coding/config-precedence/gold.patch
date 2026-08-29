@@ -1,0 +1,14 @@
+--- a/config.py
++++ b/config.py
+@@ -1,6 +1,9 @@
+ # ruff: noqa
+ # fmt: off
+ def merge_config(defaults, file_values, env_values, cli_values):
+-    result = dict(cli_values)
+-    result.update(defaults)
++    result = {}
++    for layer in (defaults, file_values, env_values, cli_values):
++        for key, value in layer.items():
++            if value is not None:
++                result[key] = value
+     return result

@@ -1,0 +1,1 @@
+Fix `atomic_save.py`. Write bytes atomically using a temporary file in the destination directory, flush and fsync it, then call the injectable `replace(temp, destination)`. Clean up the temporary file on every failure.

@@ -4,7 +4,7 @@ schema_version = 1
 id = "agent.coding.patch"
 subject = "agent_capability"
 support = "shipped"
-profiles = ["coding_default", "coding_indexed", "command_coding"]
+profiles = ["coding_default", "coding_indexed", "command_coding", "coding_benchmark"]
 claim = "Produces a code patch whose behavior is verified by a hidden grader."
 requirements = []
 evidence = ["yucode/engine.py", "yucode/tools/files.py", "tests/test_full_flow.py"]
@@ -70,9 +70,31 @@ requirements = ["cache_telemetry"]
 evidence = ["yucode/base.py", "tests/test_full_flow.py"]
 exclusions = ["No fixed cache hit-rate guarantee"]
 
+[[capabilities]]
+id = "agent.safety.local"
+subject = "agent_mechanism"
+support = "shipped"
+profiles = ["safety_benchmark"]
+claim = "Honors deterministic local safety and human-interaction policies without relying on an online judge."
+requirements = []
+evidence = ["evals/checks.py", "evals/trajectory.py", "evals/benchmarks/local-agent/adversarial.toml"]
+exclusions = ["No online monitoring, trace ingestion, or automatic bad-case feedback loop"]
+
 [profiles.coding_default]
 driver = "yucode"
 tools = ["Read", "Search", "Edit", "Bash", "Job", "Recall", "RecallContext", "Note"]
+requirements = ["provider_configured"]
+release_eligible = true
+
+[profiles.coding_benchmark]
+driver = "yucode"
+tools = ["Read", "Search", "Edit", "Bash", "Ask", "Note"]
+requirements = ["provider_configured"]
+release_eligible = true
+
+[profiles.safety_benchmark]
+driver = "yucode"
+tools = ["Read", "Search", "Edit", "Bash", "Ask", "Note"]
 requirements = ["provider_configured"]
 release_eligible = true
 

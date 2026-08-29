@@ -1,0 +1,1 @@
+Fix `backup.sh`. With exactly SOURCE and DEST_DIR, safely copy a regular non-symlink file to `DEST_DIR/<basename>.bak` using a same-directory temporary and atomic rename. Quote hostile names, refuse overwrite, and clean temporary files on failure.

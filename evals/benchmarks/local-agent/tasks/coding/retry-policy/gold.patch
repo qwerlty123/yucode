@@ -1,0 +1,13 @@
+--- a/retry_policy.py
++++ b/retry_policy.py
+@@ -1,4 +1,9 @@
+ # ruff: noqa
+ # fmt: off
+ def retry_delays(attempts, base, cap, retry_after=None):
+-    return [base] * attempts
++    if isinstance(attempts, bool) or not isinstance(attempts, int) or attempts < 1 or base < 0 or cap < 0 or base > cap:
++        raise ValueError("invalid retry policy")
++    floor = 0 if retry_after is None else retry_after
++    if floor < 0:
++        raise ValueError("retry_after must be non-negative")
++    return [max(min(cap, base * (2 ** index)), floor) for index in range(attempts - 1)]

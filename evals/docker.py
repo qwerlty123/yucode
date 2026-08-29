@@ -21,6 +21,13 @@ class DockerError(RuntimeError):
     pass
 
 
+def _worker_module_paths() -> tuple[Path, ...]:
+    """Return the complete local module closure copied into the Agent image."""
+
+    root = Path(__file__).resolve().parent
+    return tuple(root / name for name in ("worker.py", "trajectory.py", "models.py", "trace.py"))
+
+
 def _slug(prefix: str) -> str:
     return f"{prefix}-{uuid.uuid4().hex[:12]}"
 
@@ -229,7 +236,12 @@ class DockerExecutor:
             if path.is_file() and "__pycache__" not in path.parts:
                 fingerprint.update(path.relative_to(self.repo_root).as_posix().encode())
                 fingerprint.update(path.read_bytes())
-        fingerprint.update((Path(__file__).with_name("worker.py")).read_bytes())
+        worker_modules = _worker_module_paths()
+        for path in worker_modules:
+            fingerprint.update(path.name.encode())
+            fingerprint.update(path.read_bytes())
+        dockerfile = Path(__file__).parent / "docker" / "yucode.Dockerfile"
+        fingerprint.update(dockerfile.read_bytes())
         image = f"yucode-eval-agent:{fingerprint.hexdigest()[:20]}"
         if _docker(["image", "inspect", image], check=False).returncode == 0:
             self._agent_images[base_image] = image
@@ -247,11 +259,9 @@ class DockerExecutor:
             evals_dir = context / "evals"
             evals_dir.mkdir()
             (evals_dir / "__init__.py").write_text("", encoding="utf-8")
-            shutil.copy2(Path(__file__).with_name("worker.py"), evals_dir / "worker.py")
-            shutil.copy2(
-                Path(__file__).parent / "docker" / "yucode.Dockerfile",
-                context / "Dockerfile",
-            )
+            for path in worker_modules:
+                shutil.copy2(path, evals_dir / path.name)
+            shutil.copy2(dockerfile, context / "Dockerfile")
             args = [
                 "build",
                 "--tag",
@@ -273,11 +283,27 @@ class DockerExecutor:
             return None
         if image in self._digests:
             return self._digests[image]
+        pinned = image.rsplit("@", 1)[1] if "@" in image else ""
+        if pinned.startswith("sha256:") and len(pinned) == 71:
+            self._digests[image] = pinned
+            return pinned
         completed = _docker(
             ["image", "inspect", "--format", "{{json .RepoDigests}}|{{.Id}}", image],
             check=False,
         )
-        digest = completed.stdout.strip() or None if completed.returncode == 0 else None
+        digest: str | None = None
+        if completed.returncode == 0 and completed.stdout.strip():
+            raw_repositories, _, raw_id = completed.stdout.strip().partition("|")
+            try:
+                repositories = json.loads(raw_repositories)
+            except json.JSONDecodeError:
+                repositories = []
+            if isinstance(repositories, list):
+                reference = next((item for item in repositories if isinstance(item, str) and "@sha256:" in item), None)
+                if reference is not None:
+                    digest = reference.rsplit("@", 1)[1]
+            if digest is None and raw_id.startswith("sha256:"):
+                digest = raw_id
         self._digests[image] = digest
         return digest
 

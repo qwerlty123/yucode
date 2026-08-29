@@ -1,0 +1,28 @@
+--- a/stream_framing.py
++++ b/stream_framing.py
+@@ -1,4 +1,24 @@
+ # ruff: noqa
+ # fmt: off
+ def split_sse(chunks):
+-    return [str(chunk) for chunk in chunks]
++    buffer = ""
++    events = []
++    data = []
++    for chunk in chunks:
++        if isinstance(chunk, bytes):
++            chunk = chunk.decode("utf-8")
++        buffer += chunk.replace("\r\n", "\n").replace("\r", "\n")
++        while "\n" in buffer:
++            line, buffer = buffer.split("\n", 1)
++            if line == "":
++                if data:
++                    events.append("\n".join(data)); data = []
++            elif line.startswith("data:"):
++                value = line[5:]
++                data.append(value[1:] if value.startswith(" ") else value)
++    if buffer.startswith("data:"):
++        value = buffer[5:]
++        data.append(value[1:] if value.startswith(" ") else value)
++    if data:
++        events.append("\n".join(data))
++    return events

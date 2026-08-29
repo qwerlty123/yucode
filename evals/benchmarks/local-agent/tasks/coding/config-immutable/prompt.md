@@ -1,0 +1,1 @@
+Fix `config.mjs`. Deep-merge plain objects without mutating either input; arrays/scalars replace; recursively ignore `__proto__`, `prototype`, and `constructor`; returned nested data must not alias the overrides.

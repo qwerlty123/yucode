@@ -69,6 +69,9 @@ class ApplicabilityDecision:
 @dataclass(frozen=True)
 class TaskLimits:
     max_agent_steps: int | None = None
+    max_model_calls: int | None = None
+    max_tool_errors: int | None = None
+    max_total_tokens: int | None = None
     agent_timeout_seconds: int | None = None
     grader_timeout_seconds: int | None = None
     memory: str | None = None
@@ -200,6 +203,14 @@ def _optional_positive_float(value: Any, label: str) -> float | None:
     if not isinstance(value, int | float) or isinstance(value, bool) or value <= 0:
         raise EvalConfigError(f"{label} must be a positive number")
     return float(value)
+
+
+def _optional_nonnegative_int(value: Any, label: str) -> int | None:
+    if value is None:
+        return None
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise EvalConfigError(f"{label} must be a non-negative integer")
+    return value
 
 
 def _optional_nonempty_string(value: Any, label: str) -> str | None:
@@ -534,9 +545,25 @@ def _load_task(path: Path, defaults: SuiteDefaults, catalog: CapabilityCatalog) 
         raise EvalConfigError(f"{task_id}.success.require is missing: {', '.join(missing_conditions)}")
     protocol_checks = _string_list(data.get("protocol_checks", []), f"{task_id}.protocol_checks")
     safety_checks = _string_list(data.get("safety_checks", []), f"{task_id}.safety_checks")
+    from .checks import SAFETY_CHECKERS
+
+    unknown_safety = sorted(set(safety_checks) - SAFETY_CHECKERS.keys())
+    if unknown_safety:
+        raise EvalConfigError(f"{task_id}.safety_checks contains unknown checkers: {', '.join(unknown_safety)}")
     limits_data = _require_mapping(data.get("limits", {}), f"{task_id}.limits")
     limits = TaskLimits(
         max_agent_steps=_positive_int(limits_data.get("max_agent_steps"), f"{task_id}.limits.max_agent_steps", defaults.max_steps),
+        max_model_calls=(
+            _positive_int(limits_data.get("max_model_calls"), f"{task_id}.limits.max_model_calls", 1)
+            if limits_data.get("max_model_calls") is not None
+            else None
+        ),
+        max_tool_errors=_optional_nonnegative_int(limits_data.get("max_tool_errors"), f"{task_id}.limits.max_tool_errors"),
+        max_total_tokens=(
+            _positive_int(limits_data.get("max_total_tokens"), f"{task_id}.limits.max_total_tokens", 1)
+            if limits_data.get("max_total_tokens") is not None
+            else None
+        ),
         agent_timeout_seconds=_positive_int(
             limits_data.get("agent_timeout_seconds"), f"{task_id}.limits.agent_timeout_seconds", defaults.agent_timeout_seconds
         ),
@@ -550,10 +577,24 @@ def _load_task(path: Path, defaults: SuiteDefaults, catalog: CapabilityCatalog) 
     scenario_path: Path | None = None
     attachments: tuple[str, ...] = ()
     scenario_value = data.get("scenario")
+    if safety_checks and scenario_value is None:
+        raise EvalConfigError(f"{task_id}.safety_checks requires scenario")
     if scenario_value is not None:
         scenario_path = _safe_relative(task_dir, scenario_value, f"{task_id}.scenario")
         if not scenario_path.is_file():
             raise EvalConfigError(f"scenario does not exist for {task_id}: {scenario_path}")
+        try:
+            scenario_value_json = json.loads(scenario_path.read_text(encoding="utf-8"))
+            if not isinstance(scenario_value_json, dict):
+                raise TypeError("scenario root must be an object")
+            from .trajectory import scenario_from_dict
+
+            scenario_spec = scenario_from_dict(scenario_value_json)
+        except (OSError, json.JSONDecodeError, TypeError, ValueError) as exc:
+            raise EvalConfigError(f"invalid scenario for {task_id}: {exc}") from exc
+        missing_safety = sorted(set(safety_checks) - scenario_spec.safety.keys())
+        if missing_safety:
+            raise EvalConfigError(f"{task_id}.scenario.safety is missing configured checkers: {', '.join(missing_safety)}")
     attachment_values = _string_list(data.get("attachments", []), f"{task_id}.attachments")
     for attachment in attachment_values:
         raw_attachment = Path(attachment)

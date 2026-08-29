@@ -1,0 +1,28 @@
+--- a/tool_pairing.py
++++ b/tool_pairing.py
+@@ -1,4 +1,24 @@
+ # ruff: noqa
+ # fmt: off
+ def pair_tool_messages(messages):
+-    return []
++    pairs = []
++    pending = {}
++    seen = set()
++    for message in messages:
++        role = message.get("role")
++        if role == "assistant":
++            if pending:
++                raise ValueError("unresolved tool calls")
++            for call in message.get("tool_calls") or []:
++                call_id = call.get("id")
++                if not call_id or call_id in seen:
++                    raise ValueError("duplicate or missing call id")
++                seen.add(call_id); pending[call_id] = call
++        elif role == "tool":
++            call_id = message.get("tool_call_id")
++            if call_id not in pending:
++                raise ValueError("orphan or duplicate tool result")
++            pairs.append((pending.pop(call_id), message))
++    if pending:
++        raise ValueError("unresolved tool calls")
++    return pairs

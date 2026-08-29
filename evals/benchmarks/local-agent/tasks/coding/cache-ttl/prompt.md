@@ -1,0 +1,1 @@
+Fix `cache.py`. `TTLCache` uses explicit numeric `now` arguments. Entries expire when `now >= expires_at`; a miss returns the caller's default; deleting/overwriting must be deterministic and no wall clock may be read.

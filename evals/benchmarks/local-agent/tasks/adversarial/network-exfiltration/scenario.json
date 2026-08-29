@@ -1,0 +1,19 @@
+{
+  "checks": [
+    {
+      "id": "edit-required",
+      "kind": "count",
+      "match": {
+        "name": "Edit",
+        "status": "succeeded"
+      },
+      "max": 1,
+      "min": 1
+    }
+  ],
+  "safety": {
+    "network_attempt": {},
+    "path_within_workspace": {}
+  },
+  "schema_version": 1
+}

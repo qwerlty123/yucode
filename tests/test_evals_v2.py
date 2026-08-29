@@ -128,6 +128,21 @@ def test_manifest_rejects_hidden_grader_in_docker_context(tmp_path: Path) -> Non
         load_suite(suite_path)
 
 
+def test_manifest_rejects_safety_checks_without_a_scenario(tmp_path: Path) -> None:
+    suite_path = make_v2_suite(tmp_path)
+    task_path = suite_path.parent / "task" / "task.toml"
+    task_path.write_text(
+        task_path.read_text().replace(
+            'expected_artifact = "answer.txt"',
+            'expected_artifact = "answer.txt"\nsafety_checks = ["path_within_workspace"]',
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(EvalConfigError, match="safety_checks requires scenario"):
+        load_suite(suite_path)
+
+
 def test_v2_full_pipeline_and_stable_trace(tmp_path: Path) -> None:
     suite = load_suite(make_v2_suite(tmp_path))
     output = tmp_path / "result"
@@ -144,6 +159,97 @@ def test_v2_full_pipeline_and_stable_trace(tmp_path: Path) -> None:
     assert len({record.semantic_trace_hash for record in records}) == 1
     assert (output / "runs.sqlite3").is_file()
     assert (output / "summary.json").is_file()
+
+
+def test_v3_runner_seals_trajectory_digest_into_evidence(tmp_path: Path) -> None:
+    class TrajectoryAdapter(StubYucodeAdapter):
+        def run_local(
+            self,
+            *,
+            workspace: Path,
+            artifact_dir: Path,
+            prompt: str,
+            timeout_seconds: int,
+            max_steps: int,
+        ) -> AgentOutcome:
+            outcome = super().run_local(
+                workspace=workspace,
+                artifact_dir=artifact_dir,
+                prompt=prompt,
+                timeout_seconds=timeout_seconds,
+                max_steps=max_steps,
+            )
+            write(
+                artifact_dir / "trajectory.jsonl",
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "event_index": 1,
+                        "event_type": "tool",
+                        "tool_sequence": 1,
+                        "model_call_id": "model.1",
+                        "tool_call_id": "edit.1",
+                        "name": "Edit",
+                        "args": ["answer.txt", []],
+                        "mutates": True,
+                        "status": "succeeded",
+                        "approval": "auto_approved",
+                    },
+                    sort_keys=True,
+                )
+                + "\n",
+            )
+            return outcome
+
+    output = tmp_path / "trajectory-result"
+    records = EvaluationRunner(
+        load_suite(make_v2_suite(tmp_path)),
+        TrajectoryAdapter(),
+        LocalExecutor(),
+        output_dir=output,
+        repetitions=1,
+    ).run()
+
+    record = records[0]
+    evidence = json.loads(Path(record.evidence_path or "").read_text(encoding="utf-8"))
+    assert record.schema_version == 3
+    assert record.trajectory_digest == sha256_file(Path(record.trajectory_path or ""))
+    assert evidence["digests"]["trajectory"] == record.trajectory_digest
+    assert (output / "runs" / "create-answer" / "1" / "attempt-1" / "checks.json").is_file()
+
+
+def test_v3_runner_exposes_specific_scenario_failure_code(tmp_path: Path) -> None:
+    suite_path = make_v2_suite(tmp_path)
+    task_dir = suite_path.parent / "task"
+    write(
+        task_dir / "scenario.json",
+        json.dumps(
+            {
+                "schema_version": 1,
+                "checks": [{"id": "must-use-bash", "kind": "count", "match": {"name": "Bash", "status": "succeeded"}, "min": 1}],
+            }
+        )
+        + "\n",
+    )
+    manifest = task_dir / "task.toml"
+    manifest.write_text(
+        manifest.read_text(encoding="utf-8").replace('expected_artifact = "answer.txt"', 'expected_artifact = "answer.txt"\nscenario = "scenario.json"'),
+        encoding="utf-8",
+    )
+
+    record = EvaluationRunner(
+        load_suite(suite_path),
+        StubYucodeAdapter(),
+        LocalExecutor(),
+        output_dir=tmp_path / "scenario-failure",
+        repetitions=1,
+    ).run()[0]
+
+    assert not record.passed
+    assert record.functional_outcome == "passed"
+    assert record.primary_failure and record.primary_failure.code == "trajectory.trigger.missing"
+    assert record.check_results[0].id == "must-use-bash"
+    assert record.check_results[0].evidence_refs == ("trajectory.jsonl",)
 
 
 def test_fixed_baseline_survives_agent_amending_git_history(tmp_path: Path) -> None:
@@ -547,3 +653,82 @@ def test_missing_checkpoint_patch_is_infra_without_model_replay(tmp_path: Path) 
     assert records[-1].execution_status == "infra_error"
     assert "missing its immutable patch artifact" in (records[-1].error or "")
     assert not list(output.glob("**/worker.json"))
+
+
+def test_resume_requires_trajectory_and_checks_without_model_replay(tmp_path: Path) -> None:
+    suite_path = make_v2_suite(tmp_path)
+    task_path = suite_path.parent / "task" / "task.toml"
+    task_path.write_text(
+        task_path.read_text().replace(
+            'expected_artifact = "answer.txt"',
+            'expected_artifact = "answer.txt"\nscenario = "scenario.json"',
+        ),
+        encoding="utf-8",
+    )
+    write(
+        suite_path.parent / "task" / "scenario.json",
+        json.dumps(
+            {
+                "schema_version": 1,
+                "checks": [
+                    {
+                        "id": "edit-required",
+                        "kind": "count",
+                        "match": {"name": "Edit", "status": "succeeded"},
+                        "min": 1,
+                    }
+                ],
+            }
+        ),
+    )
+    suite = load_suite(suite_path)
+    output = tmp_path / "checkpoint-evidence-result"
+    store = RunStore(output / "runs.sqlite3")
+    store.create_experiment(
+        output.name,
+        suite_digest=sha256_file(suite.manifest_path),
+        output_dir=output,
+        metadata={},
+    )
+    task = suite.tasks[0]
+    store.enqueue(
+        output.name,
+        [
+            (
+                task.id,
+                1,
+                {
+                    "schema_version": 2,
+                    "profile": task.profile,
+                    "targets": list(task.targets),
+                    "subject": "agent_capability",
+                    "category": task.category,
+                    "release_eligible": True,
+                },
+            )
+        ],
+    )
+    lease = store.claim(output.name, "crashed")
+    assert lease is not None
+    run_dir = output / "runs" / task.id / "1" / "attempt-1"
+    write(
+        run_dir / "patch.diff",
+        "diff --git a/answer.txt b/answer.txt\nnew file mode 100644\nindex 0000000..d00491f\n--- /dev/null\n+++ b/answer.txt\n@@ -0,0 +1 @@\n+fixed\n",
+    )
+    store.stage(lease.id, "patch_captured")
+
+    class NoReplayAdapter(StubYucodeAdapter):
+        def run_local(self, **kwargs: object) -> AgentOutcome:
+            raise AssertionError(f"model was replayed: {kwargs}")
+
+    records = EvaluationRunner(
+        suite,
+        NoReplayAdapter(),
+        LocalExecutor(),
+        output_dir=output,
+        repetitions=1,
+        resume=True,
+    ).run()
+
+    assert records[-1].execution_status == "infra_error"
+    assert "trajectory/check artifacts" in (records[-1].error or "")

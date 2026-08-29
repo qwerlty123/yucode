@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import tempfile
 import tomllib
 from dataclasses import asdict
 from pathlib import Path
@@ -11,12 +12,13 @@ from typing import Any
 from yucode.base import Config, ConfigFile
 
 from .adapters import AgentAdapter, CommandAdapter, YucodeAdapter
+from .baseline import freeze_baseline
 from .docker import DockerError, DockerExecutor
 from .executors import LocalExecutor
 from .experiment import evaluate_release_gate, load_matrix, resolve_variant_config
 from .models import write_json
 from .report import compare_results, write_report
-from .runner import EvaluationRunner, experiment_id
+from .runner import EvaluationRunner, experiment_id, validate_baselines
 from .schema import EvalConfigError, load_suite
 from .store import RunStore
 from .swebench import SwebenchUnavailable, run_swebench
@@ -80,6 +82,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     validate = subparsers.add_parser("validate", help="validate suite and task manifests")
     validate.add_argument("suite")
+    validate.add_argument("--baselines", action="store_true", help="run base-fails/gold-passes graders without invoking a model")
+
+    freeze = subparsers.add_parser("freeze-baseline", help="freeze a complete 35x3 run into portable baseline artifacts")
+    freeze.add_argument("run_dir")
+    freeze.add_argument("--output", required=True)
 
     def add_run_arguments(command: argparse.ArgumentParser, *, output_required: bool = False) -> None:
         command.add_argument("suite")
@@ -148,7 +155,21 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "validate":
             suite = load_suite(args.suite)
+            if args.baselines:
+                executor = DockerExecutor(YucodeAdapter({}))
+                with tempfile.TemporaryDirectory(prefix="yucode-eval-validate-") as temporary:
+                    executor.bind_experiment(f"validate-{Path(temporary).name}")
+                    errors = validate_baselines(suite, executor, Path(temporary))
+                if errors:
+                    for task_id, message in sorted(errors.items()):
+                        print(f"invalid baseline {task_id}: {message}", file=sys.stderr)
+                    return 2
+                print(f"baselines valid: {len(suite.tasks)} tasks (base fails, gold passes, grader offline)")
             print(f"valid: {suite.name} ({len(suite.tasks)} tasks)")
+            return 0
+        if args.command == "freeze-baseline":
+            output = freeze_baseline(args.run_dir, args.output)
+            print(f"frozen baseline: {output}")
             return 0
         if args.command == "report":
             summary_path, report_path = write_report(args.run_dir)
@@ -337,7 +358,7 @@ def main(argv: list[str] | None = None) -> int:
             if any(record.status == "infra_error" for record in records):
                 return 3
             return 0 if records and all(record.passed for record in records) else 1
-    except (EvalConfigError, DockerError, SwebenchUnavailable, OSError, ValueError) as exc:
+    except (EvalConfigError, DockerError, SwebenchUnavailable, OSError, TypeError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     except KeyboardInterrupt:

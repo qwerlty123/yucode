@@ -1,0 +1,1 @@
+Fix `run_with_trap.sh`. It receives MARKER then a command argv. Create a private temp file, write its path to MARKER, run the command without `eval`, always remove the temp file, and exit with the command's exact status (including nonzero).

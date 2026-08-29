@@ -1,0 +1,23 @@
+--- a/atomic_save.py
++++ b/atomic_save.py
+@@ -1,4 +1,19 @@
+ # ruff: noqa
+ # fmt: off
++import os
++import tempfile
++from pathlib import Path
++
+ def atomic_save(path, data, replace=None):
+-    open(path, "wb").write(data)
++    destination = Path(path)
++    replace = os.replace if replace is None else replace
++    handle = tempfile.NamedTemporaryFile(prefix="." + destination.name + ".", dir=destination.parent, delete=False)
++    temporary = Path(handle.name)
++    try:
++        with handle:
++            handle.write(data); handle.flush(); os.fsync(handle.fileno())
++        replace(str(temporary), str(destination))
++    except BaseException:
++        try: temporary.unlink()
++        except FileNotFoundError: pass
++        raise

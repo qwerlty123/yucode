@@ -1,0 +1,1 @@
+Fix `cursor.py`. Implement deterministic URL-safe cursor encoding/decoding for `{offset: non-negative int, filters: object}`. The encoded form must omit padding and malformed cursors must raise `ValueError`.

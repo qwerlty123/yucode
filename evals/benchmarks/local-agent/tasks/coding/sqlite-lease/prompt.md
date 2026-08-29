@@ -1,0 +1,1 @@
+Fix `lease.py`. Atomically claim the lowest-id pending or expired-running job in SQLite using `BEGIN IMMEDIATE`; set owner and `lease_until=now+ttl`; return the id or `None`; rollback cleanly on errors.

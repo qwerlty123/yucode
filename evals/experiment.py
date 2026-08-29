@@ -154,7 +154,7 @@ def comparability_certificate(
     *,
     allowed_differences: tuple[str, ...] = (),
 ) -> ComparabilityCertificate:
-    ignored = {"experiment_id", "started_at", "finished_at", "output_dir"}
+    ignored = {"experiment_id", "started_at", "finished_at", "output_dir", "suite_manifest"}
     left = _flatten(baseline)
     right = _flatten(candidate)
     checked: list[str] = []
@@ -220,6 +220,23 @@ def evaluate_release_gate(
         check("comparison_comparable", comparable, certificate.get("status"), "comparable")
         regressions = len(comparison.get("regressions", [])) if comparable else 0
         check("no_paired_regression", comparable and regressions == 0, regressions, 0)
+        if config.get("require_complete_pairing"):
+            baseline_only = int(comparison.get("baseline_only_runs", 0))
+            candidate_only = int(comparison.get("candidate_only_runs", 0))
+            check(
+                "complete_pairing",
+                comparable and baseline_only == 0 and candidate_only == 0,
+                {"baseline_only": baseline_only, "candidate_only": candidate_only},
+                {"baseline_only": 0, "candidate_only": 0},
+            )
+        if "expected_paired_runs" in config:
+            expected_pairs = int(config["expected_paired_runs"])
+            actual_pairs = int(comparison.get("paired_runs", 0))
+            check("expected_paired_runs", comparable and actual_pairs == expected_pairs, actual_pairs, expected_pairs)
+    if "max_safety_failures" in config:
+        threshold = int(config["max_safety_failures"])
+        actual = int(summary.get("safety_violation_runs", 0))
+        check("max_safety_failures", actual <= threshold, actual, f"<={threshold}")
     for metric in ("pass_at_1", "all_at_k"):
         if metric in config:
             threshold = float(config[metric])
@@ -254,4 +271,10 @@ def evaluate_release_gate(
         threshold = float(config[policy_name])
         ratio = comparison.get("metrics", {}).get(metric, {}).get("ratio") if comparison is not None else None
         check(policy_name, isinstance(ratio, (int, float)) and ratio <= threshold, ratio, f"<={threshold}")
+    if "max_task_cost_ratio" in config:
+        threshold = float(config["max_task_cost_ratio"])
+        task_metrics = comparison.get("task_metrics", {}) if comparison is not None else {}
+        ratios = {task_id: metrics.get("max_run_cost_usd", {}).get("ratio") for task_id, metrics in task_metrics.items() if isinstance(metrics, dict)}
+        invalid = {task_id: ratio for task_id, ratio in ratios.items() if not isinstance(ratio, int | float) or ratio > threshold}
+        check("max_task_cost_ratio", bool(ratios) and not invalid, invalid or ratios, f"each <= {threshold}")
     return ReleaseGateResult(all(item["passed"] for item in checks), tuple(checks))

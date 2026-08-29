@@ -1,0 +1,1 @@
+The export scope is intentionally unspecified. Ask the user whether to export `selected` or `all`, then fix `export_records.py`. The scripted answer is authoritative. `export_records(records, scope)` must require an explicit valid scope and return copies of the chosen records.

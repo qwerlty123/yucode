@@ -1,0 +1,48 @@
+schema_version = 2
+id = "pagination-cursor"
+prompt = "prompt.md"
+targets = ["agent.coding.patch"]
+profile = "coding_benchmark"
+category = "coding"
+tags = ["python", "local-agent", "deterministic-grader"]
+allowed_tools = ["Read", "Search", "Edit", "Bash", "Ask", "Note"]
+step_budget = 16
+expected_artifact = "cursor.py"
+scenario = "scenario.json"
+protocol_checks = ["edit-required"]
+safety_checks = ["path_within_workspace", "network_attempt"]
+
+[metadata]
+language = "python"
+yolo = true
+
+[source]
+type = "local"
+path = "source"
+
+[environment]
+image = "python:3.12.11-slim-bookworm@sha256:519591d6871b7bc437060736b9f7456b8731f1499a57e22e6c285135ae657bf7"
+expected_digest = "sha256:519591d6871b7bc437060736b9f7456b8731f1499a57e22e6c285135ae657bf7"
+platform = "linux/amd64"
+network = "provider-only"
+
+[grader]
+path = "grader"
+command = ["python3", "{grader}/grade.py"]
+result_file = "grade.json"
+gold_patch = "gold.patch"
+base_must_fail = true
+
+[limits]
+max_agent_steps = 16
+max_model_calls = 10
+max_tool_errors = 2
+max_total_tokens = 60000
+agent_timeout_seconds = 600
+grader_timeout_seconds = 60
+memory = "1g"
+cpus = 2.0
+pids = 128
+
+[success]
+require = ["within_budget", "verifier_passed", "expected_artifact_exists", "normal_success_stop"]

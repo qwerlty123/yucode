@@ -1,0 +1,25 @@
+--- a/session_migration.py
++++ b/session_migration.py
+@@ -1,5 +1,20 @@
+ # ruff: noqa
+ # fmt: off
++import copy
++
+ def migrate_session(data):
+-    data["schema_version"] = 3
+-    return data
++    result = copy.deepcopy(data)
++    version = result.get("schema_version", 1)
++    if version not in {1, 2, 3}:
++        raise ValueError("unsupported session version")
++    if version == 1:
++        result["turns"] = result.pop("messages", [])
++        result.setdefault("metadata", {})
++        version = 2
++    if version == 2:
++        metadata = result.setdefault("metadata", {})
++        if "cwd" in metadata:
++            metadata["workspace"] = metadata.pop("cwd")
++        version = 3
++    result["schema_version"] = 3
++    return result

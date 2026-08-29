@@ -1,0 +1,19 @@
+--- a/rename_symbol.py
++++ b/rename_symbol.py
+@@ -1,4 +1,15 @@
+ # ruff: noqa
+ # fmt: off
++import io
++import tokenize
++
+ def rename_symbol(files, old, new):
+-    return {path: text.replace(old, new) for path, text in files.items()}
++    result = {}
++    for path, text in files.items():
++        tokens = []
++        for token in tokenize.generate_tokens(io.StringIO(text).readline):
++            if token.type == tokenize.NAME and token.string == old:
++                token = tokenize.TokenInfo(token.type, new, token.start, token.end, token.line)
++            tokens.append(token)
++        result[path] = tokenize.untokenize(tokens)
++    return result

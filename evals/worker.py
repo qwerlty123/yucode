@@ -11,6 +11,7 @@ import base64
 import json
 import shutil
 import sys
+import time
 import traceback
 from dataclasses import asdict
 from pathlib import Path
@@ -23,7 +24,10 @@ from yucode.model import PreparedRequest
 from yucode.runner import ToolDisplay, ToolRunner
 from yucode.session import Session, SessionSnapshotStore
 from yucode.skill import SkillLibrary
+from yucode.tools import TOOL_REGISTRY
 from yucode.tools.search import CodeIndex
+
+from .trajectory import ScriptedInteractionController, TrajectoryRecorder, scenario_from_dict
 
 
 def _write_json(path: Path, value: dict[str, Any]) -> None:
@@ -58,76 +62,37 @@ def _prepare_attachments(workspace: Path, raw_attachments: Any) -> tuple[str, ..
     return tuple(prepared)
 
 
-def _scenario_result(
-    expect: Any,
-    *,
-    workspace: Path,
-    answer: str,
-    metrics: dict[str, Any],
-) -> tuple[list[dict[str, Any]], bool]:
-    if expect is None:
-        return [], True
-    if not isinstance(expect, dict):
-        raise TypeError("scenario.expect must be an object")
-    checks: list[dict[str, Any]] = []
-
-    def check(name: str, actual: Any, expected: Any, passed: bool | None = None) -> None:
-        checks.append({"name": name, "actual": actual, "expected": expected, "passed": actual == expected if passed is None else passed})
-
-    for key, expected in expect.items():
-        if key in {"files_present", "files_absent"}:
-            if not isinstance(expected, list) or any(not isinstance(item, str) for item in expected):
-                raise TypeError(f"scenario.expect.{key} must be an array of paths")
-            actual = [item for item in expected if (workspace / item).exists()]
-            check(key, actual, expected if key == "files_present" else [], actual == expected if key == "files_present" else not actual)
-        elif key == "answer_contains":
-            needles = [expected] if isinstance(expected, str) else expected
-            if not isinstance(needles, list) or any(not isinstance(item, str) for item in needles):
-                raise TypeError("scenario.expect.answer_contains must be a string or array of strings")
-            missing = [item for item in needles if item not in answer]
-            check(key, missing, [], not missing)
-        elif key == "compactions_min":
-            if not isinstance(expected, int) or isinstance(expected, bool):
-                raise TypeError("scenario.expect.compactions_min must be an integer")
-            actual = int(metrics.get("compactions", 0))
-            check(key, actual, f">={expected}", actual >= expected)
-        elif key in {"builtin_calls_min", "cached_tokens_min", "provider_rounds_min", "provider_distinct_min"}:
-            if not isinstance(expected, int) or isinstance(expected, bool):
-                raise TypeError(f"scenario.expect.{key} must be an integer")
-            metric_name = {
-                "builtin_calls_min": "builtin_calls_count",
-                "cached_tokens_min": "cached_tokens",
-                "provider_rounds_min": "provider_rounds_count",
-                "provider_distinct_min": "provider_distinct",
-            }[key]
-            actual = int(metrics.get(metric_name, 0))
-            check(key, actual, f">={expected}", actual >= expected)
-        elif key == "index_ready":
-            actual = str(metrics.get("index_status", "")).startswith("code_index: rebuilt")
-            check(key, actual, bool(expected))
-        elif key == "tools_used":
-            if not isinstance(expected, list) or any(not isinstance(item, str) for item in expected):
-                raise TypeError("scenario.expect.tools_used must be an array of tool names")
-            observed = metrics.get("tool_names", [])
-            actual = [name for name in expected if name in observed] if isinstance(observed, list) else []
-            check(key, actual, expected)
-        elif key in {
-            "tool_errors",
-            "dangling_tool_results",
-            "model_calls",
-            "strict_tools_active",
-            "attachment_inputs",
-        }:
-            check(key, metrics.get(key), expected)
-        else:
-            raise ValueError(f"unsupported scenario expectation: {key}")
-    return checks, all(bool(item["passed"]) for item in checks)
-
-
 class EvaluationToolRunner(ToolRunner):
-    def __init__(self, *args: Any, allowed_tools: frozenset[str] | None, **kwargs: Any):
+    def __init__(
+        self,
+        *args: Any,
+        allowed_tools: frozenset[str] | None,
+        recorder: TrajectoryRecorder,
+        interactions: ScriptedInteractionController,
+        **kwargs: Any,
+    ):
         super().__init__(*args, **kwargs)
         self.allowed_tools = allowed_tools
+        self.recorder = recorder
+        self.interactions = interactions
+        self._interaction_call: ToolCall | None = None
+        self._current_model_call_id = ""
+        self._approval_by_call: dict[str, str] = {}
+        self.question_fn = self._question
+
+    def _question(self, spec: Any, _position: str) -> str:
+        call = self._interaction_call
+        return self.interactions.question(
+            self._current_model_call_id,
+            call.id if call is not None else "",
+            str(spec.question),
+        )
+
+    def confirm(self, call: ToolCall, tool: Any, batch_suffix: str = "", planned_edit: Any = None) -> tuple[bool, str]:
+        self.output_fn(self.approval_display(call, tool, "confirm", batch_suffix=batch_suffix, planned_edit=planned_edit))
+        approved, reason = self.interactions.approval(self._current_model_call_id, call.id, call.name, call.args)
+        self._approval_by_call[call.id] = "approved" if approved else "refused"
+        return approved, reason
 
     def _allowed(self, call: ToolCall) -> bool:
         return self.allowed_tools is None or call.name in self.allowed_tools
@@ -142,16 +107,92 @@ class EvaluationToolRunner(ToolRunner):
 
     def run_one(self, call: ToolCall, *args: Any, **kwargs: Any) -> tuple[str, str, dict[str, Any] | None]:
         if not self._allowed(call):
+            output = f"ToolError: tool {call.name} is not allowed by this execution profile"
+            d = ToolDisplay(batch_suffix=str(kwargs.get("batch_suffix", "")))
+            content = self.reject(call, output, d=d)
             return (
                 "failed",
-                self.reject(
-                    call,
-                    f"ToolError: tool {call.name} is not allowed by this execution profile",
-                    d=ToolDisplay(batch_suffix=str(kwargs.get("batch_suffix", ""))),
-                ),
+                content,
                 None,
             )
-        return super().run_one(call, *args, **kwargs)
+        self._interaction_call = call
+        try:
+            return super().run_one(call, *args, **kwargs)
+        finally:
+            self._interaction_call = None
+
+    def run(self, calls: list[ToolCall], batch_suffix: str = "", model_call_id: str = "") -> list[dict[str, Any]]:
+        """Adapt the public ToolRunner result protocol into deterministic eval events.
+
+        This deliberately lives in the eval worker: production ToolRunner remains
+        unchanged, while its one-result-per-call contract gives the evaluator a
+        stable observation boundary for serial, parallel, malformed, unknown,
+        refused, skipped, and Provider-builtin calls.
+        """
+
+        self._current_model_call_id = model_call_id or f"model-call.{self.session.usage.calls}"
+        started = time.monotonic()
+        try:
+            messages = super().run(calls, batch_suffix=batch_suffix)
+        except BaseException as exc:
+            elapsed = (time.monotonic() - started) / max(1, len(calls))
+            for call in calls:
+                self.recorder.record_tool(
+                    model_call_id=self._current_model_call_id,
+                    tool_call_id=call.id,
+                    name=call.name,
+                    args=call.args,
+                    mutates=bool((tool_class := TOOL_REGISTRY.get(call.name)) and tool_class.MUTATES),
+                    status="failed",
+                    error=f"{type(exc).__name__}: {exc}",
+                    elapsed_seconds=elapsed,
+                    approval=self._approval_by_call.pop(call.id, "not_required"),
+                )
+            raise
+
+        tool_messages = {
+            str(message.get("tool_call_id")): message
+            for message in messages
+            if isinstance(message, dict) and message.get("role") == "tool" and message.get("tool_call_id")
+        }
+        elapsed = (time.monotonic() - started) / max(1, len(calls))
+        builtins = self.session.config.provider.builtin_function_names()
+        for call in calls:
+            message = tool_messages.get(call.id, {})
+            content = str(message.get("content") or "")
+            approval = self._approval_by_call.pop(call.id, "not_required")
+            if call.name in builtins:
+                status = "builtin_echoed"
+            elif "Skipped: previous tool call was refused" in content:
+                status = "skipped"
+            elif approval == "refused" or "Cancelled: user refused tool call" in content:
+                status = "refused"
+                approval = "refused"
+            elif "status: failed" in content:
+                status = "failed"
+            else:
+                status = "succeeded"
+            tool_class = TOOL_REGISTRY.get(call.name)
+            mutates = bool(tool_class and tool_class.MUTATES)
+            if approval == "not_required" and status == "succeeded" and mutates and self.session.settings.yolo:
+                try:
+                    if tool_class is not None and tool_class(self.session, call.args).needs_confirmation():
+                        approval = "auto_approved"
+                except Exception:  # noqa: BLE001 - approval metadata must not affect tool execution
+                    approval = "not_required"
+            self.recorder.record_tool(
+                model_call_id=self._current_model_call_id,
+                tool_call_id=call.id,
+                name=call.name,
+                args=call.args,
+                mutates=mutates,
+                status=status,
+                error=content if status in {"failed", "refused", "skipped"} else "",
+                elapsed_seconds=elapsed,
+                approval=approval,
+                result=content,
+            )
+        return messages
 
 
 class EvaluationAgent(Agent):
@@ -160,6 +201,8 @@ class EvaluationAgent(Agent):
         session: Session,
         *,
         allowed_tools: frozenset[str] | None,
+        recorder: TrajectoryRecorder,
+        interactions: ScriptedInteractionController,
         input_fn: Any,
         output_fn: Any,
     ):
@@ -171,6 +214,8 @@ class EvaluationAgent(Agent):
             input_fn=input_fn,
             output_fn=output_fn,
             allowed_tools=allowed_tools,
+            recorder=recorder,
+            interactions=interactions,
         )
 
     def prepare_request(self, turn_messages: list[dict[str, Any]]) -> PreparedRequest:
@@ -197,6 +242,26 @@ def _run_evaluation(payload: dict[str, Any]) -> dict[str, Any]:
     config_data = payload.get("config")
     if not isinstance(config_data, dict):
         raise TypeError("config must be an object")
+    scenario_value = payload.get("_scenario", {})
+    if not isinstance(scenario_value, dict):
+        raise TypeError("scenario must be an object")
+    scenario_spec = scenario_from_dict(scenario_value)
+
+    secret_values: list[str] = []
+
+    def collect_secrets(value: Any, key: str = "") -> None:
+        if isinstance(value, dict):
+            for name, item in value.items():
+                collect_secrets(item, str(name))
+        elif isinstance(value, list):
+            for item in value:
+                collect_secrets(item, key)
+        elif isinstance(value, str) and value and any(token in key.lower() for token in ("key", "token", "secret", "password")):
+            secret_values.append(value)
+
+    collect_secrets(config_data)
+    recorder = TrajectoryRecorder(secrets=secret_values)
+    interactions = ScriptedInteractionController.from_dict(scenario_spec.interactions, recorder)
 
     # Evaluation policy is stricter than an interactive config: no MCP, provider
     # tools, quick hints, or skills unless a benchmark explicitly opts in.
@@ -226,15 +291,14 @@ def _run_evaluation(payload: dict[str, Any]) -> dict[str, Any]:
     agent = EvaluationAgent(
         session,
         allowed_tools=allowed_tools,
+        recorder=recorder,
+        interactions=interactions,
         input_fn=lambda _prompt="": "",
         output_fn=lambda value: output_lines.append(str(value)),
     )
     builtin_calls: list[dict[str, str]] = []
     if hasattr(agent.model, "on_builtin_call"):
         agent.model.on_builtin_call = lambda name, detail: builtin_calls.append({"name": str(name), "detail": str(detail)})
-    scenario = payload.get("_scenario", {})
-    if not isinstance(scenario, dict):
-        raise TypeError("scenario must be an object")
     provider_rounds: list[dict[str, Any]] = []
 
     def agent_input(text: str) -> str | UserInput:
@@ -243,10 +307,7 @@ def _run_evaluation(payload: dict[str, Any]) -> dict[str, Any]:
         images = tuple(session.images.load(str(workspace / path), source_text=path) for path in attachment_paths)
         return UserInput(text.rstrip() + "\n" + " ".join(IMAGE_MARKER for _image in images), images)
 
-    raw_rounds = scenario.get("rounds", [])
-    if not isinstance(raw_rounds, list) or any(not isinstance(item, dict) for item in raw_rounds):
-        raise TypeError("scenario.rounds must be an array of objects")
-    rounds = raw_rounds or [{"prompt": prompt}]
+    rounds = list(scenario_spec.rounds) or [{"prompt": prompt}]
     answer = ""
     for position, item in enumerate(rounds, start=1):
         provider_name = item.get("provider")
@@ -271,6 +332,7 @@ def _run_evaluation(payload: dict[str, Any]) -> dict[str, Any]:
             }
         )
     session.save_snapshot()
+    trajectory_digest = recorder.write(artifact_dir / "trajectory.jsonl")
 
     session_path = Path(SessionSnapshotStore.session_path(config.data_dir, session.cwd, session.uid))
     if session_path.is_file():
@@ -288,8 +350,12 @@ def _run_evaluation(payload: dict[str, Any]) -> dict[str, Any]:
         if isinstance(call, dict) and call.get("id")
     }
     tool_result_ids = {str(message.get("tool_call_id")) for message in session.messages if message.get("role") == "tool" and message.get("tool_call_id")}
+    tool_events = [event for event in recorder.events if event.get("event_type") == "tool"]
+    tool_status_counts = {
+        status: sum(event.get("status") == status for event in tool_events) for status in ("succeeded", "failed", "refused", "skipped", "builtin_echoed")
+    }
     metrics: dict[str, Any] = {
-        "schema_version": 2,
+        "schema_version": 3,
         "status": "ok",
         "driver": driver,
         "profile": profile,
@@ -304,9 +370,10 @@ def _run_evaluation(payload: dict[str, Any]) -> dict[str, Any]:
             "cached_write_tokens": usage["cache_write_prompt_tokens"],
         },
         "model_calls": usage["calls"],
-        "tool_calls": len(session.tool_records) + len(session.tool_errors),
-        "tool_names": [record.name for record in session.tool_records],
-        "tool_errors": len(session.tool_errors),
+        "tool_calls": len(tool_events),
+        "tool_status_counts": tool_status_counts,
+        "tool_names": [str(event.get("name")) for event in tool_events if event.get("status") in {"succeeded", "builtin_echoed"}],
+        "tool_errors": sum(event.get("status") in {"failed", "refused"} for event in tool_events),
         "compactions": session.state.compaction_count,
         "retries": session.state.model_retry_count,
         "session_uid": session.uid,
@@ -322,10 +389,10 @@ def _run_evaluation(payload: dict[str, Any]) -> dict[str, Any]:
         "cached_tokens": usage["cached_prompt_tokens"] + usage["cache_write_prompt_tokens"],
         "strict_tools_active": config.provider.resolve().strict_tools_active,
         "attachment_inputs": len(attachment_paths) if profile == "vision_attachment" else 0,
+        "trajectory_digest": trajectory_digest,
+        "trajectory_events": len(recorder.events),
+        "interaction_checks": [asdict(item) for item in interactions.outcomes()],
     }
-    checks, scenario_passed = _scenario_result(scenario.get("expect"), workspace=workspace, answer=answer, metrics=metrics)
-    metrics["scenario_checks"] = checks
-    metrics["scenario_passed"] = scenario_passed
     if session.mcp is not None:
         session.mcp.close()
     return metrics

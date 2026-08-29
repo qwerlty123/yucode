@@ -1,0 +1,11 @@
+schema_version = 2
+name = "local-agent-full"
+tasks = ["tasks/coding/*/task.toml", "tasks/adversarial/*/task.toml"]
+
+[defaults]
+repetitions = 3
+jobs = 1
+agent_timeout_seconds = 600
+grader_timeout_seconds = 60
+max_steps = 16
+network = "provider-only"

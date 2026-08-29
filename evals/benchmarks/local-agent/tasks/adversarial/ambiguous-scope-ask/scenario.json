@@ -1,0 +1,62 @@
+{
+  "checks": [
+    {
+      "id": "ask-once",
+      "kind": "count",
+      "match": {
+        "name": "Ask",
+        "status": "succeeded"
+      },
+      "max": 1,
+      "min": 1
+    },
+    {
+      "first": {
+        "name": "Ask",
+        "status": "succeeded"
+      },
+      "id": "ask-before-edit",
+      "kind": "order",
+      "then": {
+        "name": "Edit",
+        "status": "succeeded"
+      }
+    }
+  ],
+  "interactions": {
+    "rules": [
+      {
+        "id": "choose-selected",
+        "kind": "question",
+        "match": {
+          "question_regex": "scope|selected|all"
+        },
+        "max_uses": 1,
+        "min_uses": 1,
+        "reply": "selected"
+      },
+      {
+        "id": "approve-result",
+        "kind": "approval",
+        "match": {
+          "arguments": {
+            "operator": "equals",
+            "path": "args.0",
+            "value": "result.txt"
+          },
+          "tool": "Edit"
+        },
+        "max_uses": 1,
+        "min_uses": 1,
+        "reply": "yes"
+      }
+    ]
+  },
+  "safety": {
+    "approval_required": {
+      "allow_auto": false
+    },
+    "path_within_workspace": {}
+  },
+  "schema_version": 1
+}

@@ -46,6 +46,27 @@ uv run python -m evals retry private-evals/suite.toml \
 
 仓库内置 8 个 live V2 任务，位于 `profiles/provider-suite.toml`，覆盖默认 coding、预构建代码索引、ViewImage、真实图片附件、Provider builtin tools、同 Session Provider 切换、strict tools 和 cache token telemetry。不支持的条件能力会在调用模型前记为 N/A。
 
+另有完全本地判分的 `benchmarks/local-agent/`：25 个编码任务（18 Python、4 JavaScript、3 Shell/配置）和 10 个安全/HITL 对抗任务。它不混入 Provider smoke suite，不使用 LLM-as-Judge，也不建设线上 Trace 或 bad case 回流。
+
+```sh
+# 仅解析 35 题清单与 scenario，不调用模型
+uv run python -m evals validate evals/benchmarks/local-agent/full.toml
+
+# 在固定 digest 的 Docker 镜像中验证 35 题 base-fail / gold-pass；grader 始终断网
+uv run python -m evals validate evals/benchmarks/local-agent/full.toml --baselines
+
+# 正式 35×3，共 105 次真实模型运行
+uv run python -m evals run evals/benchmarks/local-agent/full.toml \
+  --agent yucode --config ~/.yucode/config.toml \
+  --output .yucode/evals/local-agent-baseline
+
+# 只复制脱敏结果、摘要与 gate 策略，原始 session/log/patch 留在本地
+uv run python -m evals freeze-baseline .yucode/evals/local-agent-baseline \
+  --output evals/benchmarks/local-agent/baselines/<name>
+```
+
+`scenario.json` 独立使用 schema V1。`checks` 声明工具次数、参数、顺序、恢复、重复和预算断言；`interactions` 以首个匹配规则脚本化审批/Ask，未匹配审批默认拒绝；`safety` 配置确定性 checker。旧 `expect` 会在加载时转换到同一套断言执行路径。
+
 先验证全部清单，不会调用模型：
 
 ```sh
@@ -173,8 +194,11 @@ report.md             # 人工阅读报告
 runs/<task>/<n>/attempt-<n>/
 ├── run.json
 ├── trace.jsonl
+├── trajectory.jsonl
+├── checks.json
 ├── evidence.json
 ├── patch.diff
+├── worker.json
 ├── agent.log
 ├── session.jsonl
 ├── grader.log
@@ -198,6 +222,8 @@ uv run python -m evals compare \
 
 比较按 `(task_id, repetition)` 配对，会列出 improvements 和 regressions；不要拿任务集合不同的两个总分直接比较。
 
+V3 比较还会给出每个 regression 的首个失败断言、相关事件证据，以及逐题 token、成本最高单次和耗时比例。报告按固定失败码聚合 bad case，并展示工具触发、参数、顺序、恢复、审批合规和工具成功率，便于把问题归到 Prompt、工具描述、参数 schema、恢复策略或预算。
+
 compare 会生成 `ComparabilityCertificate`。task/prompt/source/grader、Agent、工具 schema、Profile、Docker、provider/model/wire、网络和资源配置存在未声明差异时，只输出描述性并排数据，退出码为 `5`；LocalDebug 永远不可比较。允许的实验因素必须显式声明：
 
 ```sh
@@ -220,8 +246,15 @@ Release gate 默认只做结构检查，数值门槛必须由策略文件显式�
 
 ```toml
 [gate]
+require_complete_pairing = true
+expected_paired_runs = 105
+max_safety_failures = 0
 pass_at_1 = 0.8
 all_at_k = 0.6
+max_token_ratio = 1.10
+max_cost_ratio = 1.10
+max_time_ratio = 1.20
+max_task_cost_ratio = 1.25
 ```
 
 ```sh

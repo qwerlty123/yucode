@@ -1,0 +1,21 @@
+--- a/run_with_trap.sh
++++ b/run_with_trap.sh
+@@ -1,6 +1,15 @@
+ #!/bin/sh
++set -u
++[ "$#" -ge 2 ] || exit 2
+ marker=$1
+ shift
+-temp=/tmp/yucode-temp
+-echo "$temp" > "$marker"
+-"$@" || true
++temp=$(mktemp "${TMPDIR:-/tmp}/yucode-exit-trap.XXXXXX") || exit 2
++printf '%s\n' "$temp" > "$marker"
++cleanup() {
++    status=$?
++    trap - EXIT HUP INT TERM
++    rm -f -- "$temp"
++    exit "$status"
++}
++trap cleanup EXIT HUP INT TERM
++"$@"

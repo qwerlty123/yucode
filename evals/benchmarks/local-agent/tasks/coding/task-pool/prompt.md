@@ -1,0 +1,1 @@
+Fix `task_pool.mjs`. `runPool(tasks, limit)` runs promise-returning functions with at most `limit` active, returns results in input order, starts no later tasks after a rejection, and validates a positive integer limit.

@@ -1,0 +1,12 @@
+--- a/export_records.py
++++ b/export_records.py
+@@ -1,4 +1,7 @@
+ # ruff: noqa
+ # fmt: off
+-def export_records(records, scope=None):
+-    return records
++def export_records(records, scope):
++    if scope not in {"selected", "all"}:
++        raise ValueError("scope must be selected or all")
++    chosen = records if scope == "all" else [record for record in records if record.get("selected")]
++    return [dict(record) for record in chosen]

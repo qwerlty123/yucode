@@ -1,0 +1,1 @@
+Fix `migrate_profile.py`. `migrate_text` converts a legacy top-level `[provider]` block into `[provider] active = "default"` plus `[provider.default]`, preserves provider key order and all later sections verbatim, and is idempotent for already-migrated input.

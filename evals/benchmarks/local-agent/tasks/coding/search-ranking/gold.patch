@@ -1,0 +1,20 @@
+--- a/search_rank.py
++++ b/search_rank.py
+@@ -1,4 +1,16 @@
+ # ruff: noqa
+ # fmt: off
++import re
++
++def _tokens(value):
++    return set(re.findall(r"[A-Za-z0-9]+", value.lower()))
++
+ def rank(query, documents):
+-    return documents
++    wanted = _tokens(query)
++    scored = []
++    for document in documents:
++        score = 3 * len(wanted & _tokens(document.get("title", ""))) + len(wanted & _tokens(document.get("body", "")))
++        if score:
++            scored.append((score, str(document["id"]), document["id"]))
++    scored.sort(key=lambda item: (-item[0], item[1]))
++    return [item[2] for item in scored]

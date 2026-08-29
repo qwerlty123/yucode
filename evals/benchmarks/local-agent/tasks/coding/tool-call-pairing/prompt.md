@@ -1,0 +1,1 @@
+Fix `tool_pairing.py`. Pair assistant `tool_calls` with later tool-result messages by id, preserving call order. Reject duplicate call ids, duplicate results, results without calls, or any call left unresolved before the next assistant message/end.

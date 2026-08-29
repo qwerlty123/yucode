@@ -1,0 +1,1 @@
+Fix `stream_framing.py`. Incrementally frame an SSE byte/text chunk stream. Accept CRLF or LF, join multiple `data:` lines with `\n`, ignore comments/other fields, emit only on a blank line, and flush a final complete event at EOF.

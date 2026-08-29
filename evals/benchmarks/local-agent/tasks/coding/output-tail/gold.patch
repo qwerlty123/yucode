@@ -1,0 +1,18 @@
+--- a/output_tail.py
++++ b/output_tail.py
+@@ -1,4 +1,14 @@
+ # ruff: noqa
+ # fmt: off
+ def tail_bytes(chunks, limit):
+-    return b"".join(chunks)
++    if limit < 0:
++        raise ValueError("limit must be non-negative")
++    if limit == 0:
++        for _chunk in chunks: pass
++        return b""
++    tail = bytearray()
++    for chunk in chunks:
++        tail.extend(chunk)
++        if len(tail) > limit:
++            del tail[:-limit]
++    return bytes(tail)

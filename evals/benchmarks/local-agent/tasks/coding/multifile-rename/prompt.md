@@ -1,0 +1,1 @@
+Fix `rename_symbol.py`. Rename a Python identifier across a `{path: source}` mapping using Python tokenization so only NAME tokens change—not comments or string literals. Preserve all other text and mapping keys.

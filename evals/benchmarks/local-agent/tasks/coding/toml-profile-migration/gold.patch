@@ -1,0 +1,19 @@
+--- a/migrate_profile.py
++++ b/migrate_profile.py
+@@ -1,4 +1,15 @@
+ # ruff: noqa
+ # fmt: off
+ def migrate_text(text):
+-    return text
++    lines = text.splitlines()
++    if any(line.strip().startswith("[provider.") for line in lines):
++        return text
++    try:
++        start = next(index for index, line in enumerate(lines) if line.strip() == "[provider]")
++    except StopIteration:
++        raise ValueError("missing provider table")
++    end = next((index for index in range(start + 1, len(lines)) if lines[index].strip().startswith("[")), len(lines))
++    body = lines[start + 1:end]
++    migrated = lines[:start] + ["[provider]", 'active = "default"', "", "[provider.default]"] + body + lines[end:]
++    suffix = "\n" if text.endswith("\n") else ""
++    return "\n".join(migrated) + suffix

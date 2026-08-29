@@ -1,0 +1,19 @@
+--- a/path_scope.py
++++ b/path_scope.py
+@@ -1,5 +1,15 @@
+ # ruff: noqa
+ # fmt: off
+ from pathlib import Path
++
+ def resolve_scoped(root, candidate):
+-    return Path(root) / candidate
++    root = Path(root).resolve()
++    candidate = Path(candidate)
++    if candidate.is_absolute() or ".." in candidate.parts:
++        raise ValueError("path escapes root")
++    resolved = (root / candidate).resolve(strict=False)
++    try:
++        resolved.relative_to(root)
++    except ValueError as exc:
++        raise ValueError("path escapes root") from exc
++    return resolved

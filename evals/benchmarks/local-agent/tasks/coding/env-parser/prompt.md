@@ -1,0 +1,1 @@
+Fix `env_parser.py`. Parse dotenv text into a dict: ignore blank/comment lines, accept optional `export`, split on the first `=`, trim keys, unquote single/double quoted values, and reject malformed keys or lines.

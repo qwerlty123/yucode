@@ -1,0 +1,11 @@
+--- a/cancel_cleanup.py
++++ b/cancel_cleanup.py
+@@ -1,4 +1,7 @@
+ # ruff: noqa
+ # fmt: off
+ async def run_with_cleanup(work, cleanup):
+-    return await work()
++    try:
++        return await work()
++    finally:
++        await cleanup()

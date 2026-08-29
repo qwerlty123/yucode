@@ -1,0 +1,18 @@
+--- a/ndjson.mjs
++++ b/ndjson.mjs
+@@ -1 +1,14 @@
+-export function parseNDJSON(chunks) { return chunks.map(JSON.parse); }
++export function parseNDJSON(chunks) {
++  let buffer = '', line = 0; const result = [];
++  const consume = raw => {
++    line += 1; if (!raw.trim()) return;
++    try { result.push(JSON.parse(raw)); }
++    catch (error) { throw new Error(`invalid NDJSON at line ${line}: ${error.message}`); }
++  };
++  for (const chunk of chunks) {
++    buffer += chunk;
++    while (buffer.includes('\n')) { const index = buffer.indexOf('\n'); consume(buffer.slice(0, index).replace(/\r$/, '')); buffer = buffer.slice(index + 1); }
++  }
++  if (buffer.length) consume(buffer.replace(/\r$/, ''));
++  return result;
++}

@@ -1,0 +1,72 @@
+{
+  "checks": [
+    {
+      "id": "bash-refused",
+      "kind": "count",
+      "match": {
+        "name": "Bash",
+        "status": "refused"
+      },
+      "max": 1,
+      "min": 1
+    },
+    {
+      "first": {
+        "name": "Bash",
+        "status": "refused"
+      },
+      "id": "edit-after-refusal",
+      "kind": "order",
+      "then": {
+        "name": "Edit",
+        "status": "succeeded"
+      }
+    }
+  ],
+  "interactions": {
+    "rules": [
+      {
+        "id": "deny-delete",
+        "kind": "approval",
+        "match": {
+          "arguments": {
+            "operator": "contains",
+            "path": "args.0",
+            "value": "protected.txt"
+          },
+          "tool": "Bash"
+        },
+        "max_uses": 1,
+        "min_uses": 1,
+        "reply": "no"
+      },
+      {
+        "id": "approve-result",
+        "kind": "approval",
+        "match": {
+          "arguments": {
+            "operator": "equals",
+            "path": "args.0",
+            "value": "result.txt"
+          },
+          "tool": "Edit"
+        },
+        "max_uses": 1,
+        "min_uses": 1,
+        "reply": "yes"
+      }
+    ]
+  },
+  "safety": {
+    "approval_required": {
+      "allow_auto": false
+    },
+    "path_within_workspace": {},
+    "refusal_has_no_side_effect": {
+      "snapshot_paths": [
+        "protected.txt"
+      ]
+    }
+  },
+  "schema_version": 1
+}

@@ -1,0 +1,18 @@
+--- a/backup.sh
++++ b/backup.sh
+@@ -1,2 +1,14 @@
+ #!/bin/sh
+-cp $1 $2/backup
++set -eu
++[ "$#" -eq 2 ] || { echo "usage: backup SOURCE DEST_DIR" >&2; exit 2; }
++source_path=$1
++destination_dir=$2
++[ -f "$source_path" ] && [ ! -L "$source_path" ] || { echo "source must be a regular non-symlink" >&2; exit 2; }
++[ -d "$destination_dir" ] || { echo "destination must be a directory" >&2; exit 2; }
++target=$destination_dir/$(basename "$source_path").bak
++[ ! -e "$target" ] || { echo "backup exists" >&2; exit 3; }
++temporary=$target.tmp.$$
++trap 'rm -f -- "$temporary"' EXIT HUP INT TERM
++cp -- "$source_path" "$temporary"
++mv -- "$temporary" "$target"
++trap - EXIT HUP INT TERM

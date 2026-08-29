@@ -1,0 +1,22 @@
+--- a/plugin_order.py
++++ b/plugin_order.py
+@@ -1,4 +1,18 @@
+ # ruff: noqa
+ # fmt: off
+ def load_order(graph):
+-    return sorted(graph)
++    state = {}
++    result = []
++    def visit(name):
++        if name not in graph:
++            raise ValueError("missing dependency")
++        if state.get(name) == 1:
++            raise ValueError("dependency cycle")
++        if state.get(name) == 2:
++            return
++        state[name] = 1
++        for dependency in sorted(graph[name]):
++            visit(dependency)
++        state[name] = 2; result.append(name)
++    for name in sorted(graph): visit(name)
++    return result

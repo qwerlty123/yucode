@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
@@ -80,6 +81,27 @@ def render_report(summary: dict[str, Any], records: list[RunRecord]) -> str:
             rate = "N/A" if item["success_rate"] is None else _percent(item["success_rate"])
             lines.append(f"| `{item['capability']}` | {item['passed']}/{item['runs']} | {item['not_applicable']} | {item['infra']} | {rate} |")
 
+    classification = summary.get("classification_metrics", {})
+    if isinstance(classification, dict) and classification:
+        labels = {
+            "tool_trigger_accuracy": "Tool trigger accuracy",
+            "argument_accuracy": "Argument accuracy",
+            "order_accuracy": "Order accuracy",
+            "recovery_rate": "Recovery rate",
+            "approval_compliance": "Approval compliance",
+            "tool_success_rate": "Tool success rate",
+        }
+        lines.extend(["", "## Trajectory and safety metrics", "", "| Metric | Result |", "|---|---:|"])
+        for name, label in labels.items():
+            value = classification.get(name)
+            lines.append(f"| {label} | {'N/A' if value is None else _percent(float(value))} |")
+
+    bad_cases = summary.get("failure_code_counts", {})
+    if isinstance(bad_cases, dict) and bad_cases:
+        lines.extend(["", "## Bad cases by first-class failure code", "", "| Rank | Failure code | Runs |", "|---:|---|---:|"])
+        for rank, (code, count) in enumerate(bad_cases.items(), start=1):
+            lines.append(f"| {rank} | `{code}` | {count} |")
+
     failures: dict[str, list[RunRecord]] = defaultdict(list)
     for record in records:
         if not record.passed and record.applicability == "applicable":
@@ -130,15 +152,37 @@ def compare_results(
         allowed_differences=allowed_differences,
     )
 
-    baseline_runs = {(record.task_id, record.repetition): record for record in baseline_records}
-    candidate_runs = {(record.task_id, record.repetition): record for record in candidate_records}
+    def latest(records: list[RunRecord]) -> dict[tuple[str, int], RunRecord]:
+        selected: dict[tuple[str, int], RunRecord] = {}
+        for record in records:
+            key = (record.task_id, record.repetition)
+            if key not in selected or record.attempt >= selected[key].attempt:
+                selected[key] = record
+        return selected
+
+    def first_failed_check(record: RunRecord) -> dict[str, Any] | None:
+        outcome = next((item for item in record.check_results if not item.passed), None)
+        return asdict(outcome) if outcome is not None else None
+
+    def failure_detail(record: RunRecord) -> dict[str, Any] | None:
+        return asdict(record.primary_failure) if record.primary_failure is not None else None
+
+    baseline_runs = latest(baseline_records)
+    candidate_runs = latest(candidate_records)
     common = sorted(baseline_runs.keys() & candidate_runs.keys())
     regressions = []
     improvements = []
     for key in common:
         old = baseline_runs[key]
         new = candidate_runs[key]
-        item = {"task_id": key[0], "repetition": key[1]}
+        item = {
+            "task_id": key[0],
+            "repetition": key[1],
+            "baseline_primary_failure": failure_detail(old),
+            "candidate_primary_failure": failure_detail(new),
+            "baseline_first_failed_check": first_failed_check(old),
+            "candidate_first_failed_check": first_failed_check(new),
+        }
         if certificate.comparable and old.passed and not new.passed:
             regressions.append(item)
         elif certificate.comparable and not old.passed and new.passed:
@@ -155,8 +199,26 @@ def compare_results(
             "ratio": new / old if certificate.comparable and comparable_values and old else None,
         }
 
+    baseline_tasks = {item["task_id"]: item for item in baseline.get("task_results", [])}
+    candidate_tasks = {item["task_id"]: item for item in candidate.get("task_results", [])}
+    task_metrics: dict[str, dict[str, Any]] = {}
+    for task_id in sorted(baseline_tasks.keys() | candidate_tasks.keys()):
+        old_task = baseline_tasks.get(task_id, {})
+        new_task = candidate_tasks.get(task_id, {})
+        task_metrics[task_id] = {}
+        for name in ("total_tokens", "estimated_cost_usd", "max_run_cost_usd", "duration_seconds"):
+            old_value = old_task.get(name)
+            new_value = new_task.get(name)
+            numeric = isinstance(old_value, int | float) and isinstance(new_value, int | float)
+            task_metrics[task_id][name] = {
+                "baseline": old_value,
+                "candidate": new_value,
+                "delta": new_value - old_value if certificate.comparable and numeric else None,
+                "ratio": new_value / old_value if certificate.comparable and numeric and old_value else None,
+            }
+
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "baseline_experiment": baseline["experiment_id"],
         "candidate_experiment": candidate["experiment_id"],
         "paired_runs": len(common),
@@ -177,4 +239,5 @@ def compare_results(
         },
         "regressions": regressions,
         "improvements": improvements,
+        "task_metrics": task_metrics,
     }

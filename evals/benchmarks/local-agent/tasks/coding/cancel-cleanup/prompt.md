@@ -1,0 +1,1 @@
+Fix `cancel_cleanup.py`. `run_with_cleanup(work, cleanup)` awaits the work coroutine/callable and always awaits cleanup exactly once, including cancellation and errors, while preserving the original result or exception.
