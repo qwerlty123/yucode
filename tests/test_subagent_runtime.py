@@ -144,7 +144,7 @@ def test_fresh_and_fork_context_are_separate_and_nested_spawn_is_rejected(tmp_pa
     contexts = []
 
     def execute(child, _prompt):
-        contexts.append([message.get("content") for message in child.messages])
+        contexts.append(([message.get("content") for message in child.messages], child.system_prompt))
         return "ok"
 
     runtime = SubagentRuntime(root, executor=execute)
@@ -152,7 +152,11 @@ def test_fresh_and_fork_context_are_separate_and_nested_spawn_is_rejected(tmp_pa
     forked = runtime.spawn(AgentSpec("fork", "执行", context="fork"))
 
     assert fresh.status == forked.status == "completed"
-    assert contexts == [[], ["父会话事实", "当前委派要求"]]
+    assert contexts[0][0] == []
+    assert "Fork context" not in contexts[0][1]
+    assert contexts[1][0] == ["父会话事实", "当前委派要求"]
+    assert "conversation above is a frozen snapshot" in contexts[1][1]
+    assert "detached from the parent" in contexts[1][1]
     with pytest.raises(ToolError, match="不允许再启动"):
         runtime.spawn(AgentSpec("nested", "执行"), caller_task_id=fresh.task_id)
     runtime.close()

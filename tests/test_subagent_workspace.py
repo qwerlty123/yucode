@@ -130,7 +130,7 @@ def test_worktree_uses_origin_default_and_preserves_committed_changes(tmp_path):
     seen = []
 
     def execute(child, _prompt):
-        seen.append((child.cwd, (os.path.join(child.cwd, "tracked.txt"))))
+        seen.append(child.system_prompt)
         assert Path(child.cwd, "tracked.txt").read_text(encoding="utf-8") == "main\n"
         assert not os.path.exists(os.path.join(child.cwd, "untracked.txt"))
         with open(os.path.join(child.cwd, "agent.txt"), "w", encoding="utf-8") as handle:
@@ -149,6 +149,12 @@ def test_worktree_uses_origin_default_and_preserves_committed_changes(tmp_path):
     assert task.workspace["parent_dirty_excluded"] is True
     assert task.workspace["cleanup_state"] == "retained"
     assert os.path.isdir(task.workspace["path"])
+    assert str(repository) in seen[0]
+    assert task.workspace["path"] in seen[0]
+    assert 'base_ref: "origin/main"' in seen[0]
+    assert task.workspace["base_commit"] in seen[0]
+    assert "Translate them to the child worktree root and never edit the parent path" in seen[0]
+    assert "tracked and untracked changes are absent here" in seen[0]
     assert "agent.txt" in task.changed_files
     assert not (repository / "agent.txt").exists()
     assert (repository / "tracked.txt").read_text(encoding="utf-8") == "feature dirty\n"

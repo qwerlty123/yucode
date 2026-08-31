@@ -1272,9 +1272,50 @@ class SubagentRuntime:
         blocks = [
             "You are a yucode sub-agent. Work only on the delegated objective, do not attempt to create other agents, and return concise evidence.",
             task.profile.prompt,
+            self._execution_context_prompt(task),
         ]
         if skills is not None:
             for name in task.profile.skills:
                 if skill := skills.get(name):
                     blocks.append(f"[{skill.name}] {skill.description}\n{skills.expand(skill)}")
         return "\n\n".join(block for block in blocks if block).strip()
+
+    def _execution_context_prompt(self, task: _TaskRecord) -> str:
+        """把 fork/worktree 的现有运行事实解释给 child，避免沿用父路径和过期内容。"""
+
+        rows: list[str] = []
+        if task.context == "fork":
+            rows.extend(
+                [
+                    "--- Fork context ---",
+                    "The conversation above is a frozen snapshot taken when the task was launched. It is detached from the parent and will not receive later parent changes.",
+                    "Treat inherited conclusions and file contents as potentially stale: re-read current files before relying on or editing them, and follow the delegated prompt as the active scope.",
+                ]
+            )
+        if task.isolation != "worktree":
+            return "\n".join(rows)
+
+        workspace = task.workspace
+        parent = json.dumps(os.path.abspath(self.root.cwd), ensure_ascii=False)
+        child = json.dumps(str(workspace.get("path") or ""), ensure_ascii=False)
+        branch = json.dumps(str(workspace.get("branch") or ""), ensure_ascii=False)
+        base_ref = json.dumps(str(workspace.get("base_ref") or ""), ensure_ascii=False)
+        base_commit = json.dumps(str(workspace.get("base_commit") or ""), ensure_ascii=False)
+        dirty = "The parent checkout was dirty when this worktree was created; its tracked and untracked changes are absent here."
+        if not workspace.get("parent_was_dirty"):
+            dirty = "Parent dirty content is excluded by design; no dirty parent content was detected when this worktree was created."
+        rows.extend(
+            [
+                "--- Worktree context ---",
+                f"parent_checkout: {parent}",
+                f"child_worktree: {child}",
+                f"branch: {branch}",
+                f"base_ref: {base_ref}",
+                f"base_commit: {base_commit}",
+                "You are operating in the child worktree, which is a separate working copy of the same repository.",
+                "Absolute paths in the delegated prompt or inherited conversation may point at the parent checkout. Translate them to the child worktree root and never edit the parent path.",
+                dirty,
+                "Re-read files in the child worktree before editing. Changes made here stay isolated and are not automatically copied, merged, or committed into the parent checkout.",
+            ]
+        )
+        return "\n".join(rows)
