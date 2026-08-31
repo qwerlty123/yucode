@@ -11,7 +11,7 @@ import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar
 
 from yucode.base import (
     ActiveResource,
@@ -39,6 +39,9 @@ from yucode.tools import (
     ReadTool,
     Tool,
 )
+
+if TYPE_CHECKING:
+    from yucode.subagent import AgentTaskView
 
 
 class EditBatchPlan:
@@ -330,7 +333,7 @@ class ToolRunner:
     def run_agents(self, calls: list[ToolCall], batch_suffix: str, state: dict[str, bool]) -> list[Json]:
         """先启动同一连续段的全部子 Agent，再按模型调用顺序收集结果。"""
 
-        launched: list[tuple[AgentTool | None, object | None, str, float]] = []
+        launched: list[tuple[AgentTool | None, AgentTaskView | None, str, float]] = []
         for call in calls:
             started = time.monotonic()
             try:

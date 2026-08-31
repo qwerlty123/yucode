@@ -69,6 +69,7 @@ class WorktreeManager:
 
     def prepare(self, task_id: str, previous: Json | None = None) -> Json:
         previous = dict(previous or {})
+        warnings: list[str]
         if previous.get("path") and previous.get("cleanup_state") in {"active", "retained", "cleanup_failed"}:
             path = str(previous["path"])
             if self._valid_worktree(path):

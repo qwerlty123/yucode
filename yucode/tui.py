@@ -946,7 +946,10 @@ class TuiApp:
             finally:
                 done.set()
 
-        self._schedule(lambda: app.create_background_task(edit()))
+        def schedule_edit() -> None:
+            app.create_background_task(edit())  # 返回的 Task 由 prompt-toolkit 事件循环持有，无需跨线程传回。
+
+        self._schedule(schedule_edit)
         done.wait()
         return bool(succeeded and succeeded[0])
 

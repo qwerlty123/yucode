@@ -1049,7 +1049,7 @@ class SubagentRuntime:
         child.system_prompt = self._system_prompt(task, child.skills)
         return child
 
-    def _execute_with_agent(self, child: Session, prompt: str) -> str:
+    def _execute_with_agent(self, child: Session, prompt: str) -> str | AgentOutcome:
         task_id = child.uid
         with self._lock:
             task = self._require(task_id)
