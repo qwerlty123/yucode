@@ -3,7 +3,7 @@ import os
 import pytest
 from agent_harness import call, session
 
-from yucode.agent_profile import AgentProfileLibrary
+from yucode.agent_profile import AgentProfile, AgentProfileLibrary
 from yucode.base import RuntimeSettings, ToolError
 from yucode.context import ContextManager
 from yucode.engine import Agent
@@ -60,11 +60,12 @@ def test_empty_tool_catalog_does_not_fall_back_to_global_tools(tmp_path):
     assert "unknown tool Bash" in result[0]["content"]
 
 
-def test_explicit_empty_profile_allowlist_grants_no_tools(tmp_path):
+@pytest.mark.parametrize("tools_line", ["tools:", "tools: []"])
+def test_explicit_empty_profile_allowlist_grants_no_tools(tmp_path, tools_line):
     directory = tmp_path / ".yucode" / "agents" / "no-tools"
     directory.mkdir(parents=True)
     (directory / "AGENT.md").write_text(
-        "---\nname: no-tools\ndescription: 不使用工具\ntools:\n---\n只返回文字。\n",
+        f"---\nname: no-tools\ndescription: 不使用工具\n{tools_line}\n---\n只返回文字。\n",
         encoding="utf-8",
     )
     s = session(tmp_path)
@@ -77,6 +78,78 @@ def test_explicit_empty_profile_allowlist_grants_no_tools(tmp_path):
     assert task.status == "completed"
     assert seen == []
     runtime.close()
+
+
+def test_agent_profile_frontmatter_accepts_common_yaml_scalar_and_list_forms(tmp_path):
+    directory = tmp_path / ".yucode" / "agents" / "yaml-review"
+    directory.mkdir(parents=True)
+    (directory / "AGENT.md").write_text(
+        """---
+name: "yaml-review"
+description: >
+  审查实现细节
+  并验证测试结果
+tools:
+  - Read
+  - "Search"
+disallowed-tools: [Edit, 'Bash'] # 不允许修改
+model: "test-model"
+background: yes
+isolation: worktree
+context: fork
+max_steps: 12
+timeout_seconds: 30
+skills: []
+---
+只读审查并返回证据。
+""",
+        encoding="utf-8",
+    )
+    s = session(tmp_path)
+    s.config.provider.model = "test-model"
+
+    profile = AgentProfileLibrary.load(s).get("YAML-REVIEW")
+
+    assert profile is not None
+    assert profile.valid
+    assert profile.description == "审查实现细节 并验证测试结果"
+    assert profile.tools == ("Read", "Search")
+    assert profile.disallowed_tools == ("Edit", "Bash")
+    assert profile.model == "test-model"
+    assert profile.background is True
+    assert (profile.isolation, profile.context) == ("worktree", "fork")
+    assert (profile.max_steps, profile.timeout_seconds) == (12, 30)
+    assert profile.skills == ()
+    assert profile.prompt == "只读审查并返回证据。"
+
+
+def test_agent_profile_frontmatter_reports_unknown_duplicate_and_malformed_metadata(tmp_path):
+    directory = tmp_path / ".yucode" / "agents" / "broken"
+    directory.mkdir(parents=True)
+    (directory / "AGENT.md").write_text(
+        """---
+name: broken
+name: duplicate
+description: 畸形档案
+mystery: true
+tools: Read,, Search
+model test-model
+  - orphan
+---
+不会运行。
+""",
+        encoding="utf-8",
+    )
+
+    profile = AgentProfileLibrary.load(session(tmp_path)).get("broken")
+
+    assert profile is not None
+    assert not profile.valid
+    assert any("重复定义字段: name" in error for error in profile.errors)
+    assert any("未知字段: mystery" in error for error in profile.errors)
+    assert any("tools 列表包含空项" in error for error in profile.errors)
+    assert any("不是有效的 key: value" in error for error in profile.errors)
+    assert any("无归属的缩进内容" in error for error in profile.errors)
 
 
 def test_model_argument_parser_uses_the_same_session_catalog(tmp_path):
@@ -264,6 +337,18 @@ def test_agent_profile_library_creates_copies_and_deletes_custom_profiles(tmp_pa
     library.delete("review")
     assert library.get("review") is None
     assert not (tmp_path / ".yucode" / "agents" / "review" / "AGENT.md").exists()
+
+
+def test_agent_profile_library_serialization_preserves_quoted_metadata(tmp_path):
+    s = session(tmp_path)
+    library = AgentProfileLibrary.load(s)
+    template = AgentProfile("template", "审查 #1: API, tests", "返回结论。", tools=("Read", "Search"))
+
+    created = library.create("quoted", source="project", template=template)
+
+    assert created.valid
+    assert created.description == "审查 #1: API, tests"
+    assert created.tools == ("Read", "Search")
 
 
 def test_agent_profile_library_can_override_a_lower_layer_and_wrap_write_failures(tmp_path):

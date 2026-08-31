@@ -1275,6 +1275,30 @@ def test_agents_manager_can_open_a_scrollable_child_transcript(tmp_path):
     runtime.close()
 
 
+def test_agent_library_reload_reports_profile_validation_errors_immediately(tmp_path):
+    s = session(tmp_path)
+    s.config.provider.model = "test-model"
+    directory = tmp_path / ".yucode" / "agents" / "broken"
+    directory.mkdir(parents=True)
+    path = directory / "AGENT.md"
+    path.write_text(
+        "---\nname: broken\ndescription: 待修复\nunknown_field: true\ntools: Read\n---\n检查。\n",
+        encoding="utf-8",
+    )
+    runtime = SubagentRuntime(s, executor=lambda _child, _prompt: "完成")
+    output = []
+    command_loop = CommandLoop(Agent(s, output_fn=output.append), input_fn=lambda _prompt: "", output_fn=output.append)
+
+    command_loop.reload_agent_profile_feedback(runtime, "broken", str(path))
+
+    rendered = "\n".join(str(item) for item in output)
+    assert "Agent profile broken" in rendered
+    assert str(path) in rendered
+    assert "is invalid" in rendered
+    assert "未知字段: unknown_field" in rendered
+    runtime.close()
+
+
 def test_stale_subagent_interaction_does_not_open_ui(tmp_path):
     s = session(tmp_path)
     request = {

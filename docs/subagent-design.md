@@ -135,11 +135,11 @@ skills: code-review
 只执行委派的审查任务。按严重程度返回文件、位置、原因和验证方法。
 ```
 
-支持的 frontmatter 字段为 `name`、`description`、`tools`、`disallowed_tools`、`model`、`background`、`isolation`、`context`、`max_steps`、`timeout_seconds` 和 `skills`。正文是 profile system prompt。
+支持的 frontmatter 字段为 `name`、`description`、`tools`、`disallowed_tools`、`model`、`background`、`isolation`、`context`、`max_steps`、`timeout_seconds` 和 `skills`。正文是 profile system prompt。列表字段既可写成逗号分隔值，也可使用 `[Read, Search]` 或缩进的 `- Read`；标量支持单/双引号，`description` 等字段也可使用 `|`、`>` 多行块。这里有意只实现这些字段需要的 YAML 子集，不接受嵌套对象。
 
-未知工具、非法模型、allow/deny 冲突、非法名称和非法字段值都会让 profile invalid；未安装 skill 只产生 warning。任务启动时保存完整 profile 和 SkillLibrary snapshot，随后 reload 或编辑只影响新 spawn；resume 也继续使用原快照。
+未知字段、重复字段、畸形 metadata 行、未知工具、非法模型、allow/deny 冲突、非法名称和非法字段值都会让 profile invalid；其中 metadata 语法类错误带源文件行号保留在 Library 中。未安装 skill 只产生 warning。任务启动时保存完整 profile 和 SkillLibrary snapshot，随后 reload 或编辑只影响新 spawn；resume 也继续使用原快照。
 
-Library 标签可以查看所有来源，创建、复制、编辑、删除自定义 profile；新建和复制默认写入项目级 `.yucode/agents/`。内置项只读。
+Library 标签可以查看所有来源，创建、复制、编辑、删除自定义 profile；新建和复制默认写入项目级 `.yucode/agents/`。编辑器退出后立即 reload 并报告该 profile 的 errors/warnings，内置项只读。
 
 ## 能力边界
 

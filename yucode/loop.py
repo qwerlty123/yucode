@@ -1797,6 +1797,7 @@ Agent, AgentTask, Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall,
                         f"mode    {'background' if item.background else 'foreground'} · {item.isolation} · {item.context}",
                         f"path    {item.path or '(builtin, read-only)'}",
                         *(f"error   {error}" for error in item.errors),
+                        *(f"warning {warning}" for warning in item.warnings),
                     ]
                 parts.extend(("ansibrightblack", "  " + Text.clip_width(row, width - 2) + "\n") for row in rows)
             hint = (
@@ -1892,20 +1893,20 @@ Agent, AgentTask, Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall,
                     if name:
                         profile = runtime.profiles.create(name, source="project")
                         self.tui.edit_path_in_editor(profile.path)
-                        runtime.reload_profiles()
+                        self.reload_agent_profile_feedback(runtime, profile.name, profile.path)
                 elif kind == "copy":
                     name = self.tui.request_input("Copy as: ").strip()
                     if name:
                         profile = runtime.profiles.copy(action[1], name, source="project")
                         self.tui.edit_path_in_editor(profile.path)
-                        runtime.reload_profiles()
+                        self.reload_agent_profile_feedback(runtime, profile.name, profile.path)
                 elif kind == "edit":
                     profile = runtime.profiles.get(action[1])
                     if profile is None or not profile.path:
                         self.emit("Built-in Agent profiles are read-only; copy it before editing.")
                     else:
                         self.tui.edit_path_in_editor(profile.path)
-                        runtime.reload_profiles()
+                        self.reload_agent_profile_feedback(runtime, profile.name, profile.path)
                 elif kind == "delete":
                     profile = runtime.profiles.get(action[1])
                     if profile is None or profile.source == "builtin":
@@ -1917,6 +1918,26 @@ Agent, AgentTask, Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall,
                             runtime.reload_profiles()
             except ToolError as error:
                 self.emit("Error: " + str(error))
+
+    def reload_agent_profile_feedback(self, runtime, name: str, path: str = "") -> None:
+        """编辑器返回后立即重载并报告该档案的校验结果，错误无需等到下次启动任务才暴露。"""
+
+        library = runtime.reload_profiles()
+        target = os.path.abspath(path) if path else ""
+        profile = next((item for item in library.all() if item.path and os.path.abspath(item.path) == target), None) if target else library.get(name)
+        if profile is None:
+            self.emit(f"Agent profile {name} was not found after reload.")
+            return
+        location = f" ({profile.path})" if profile.path else ""
+        if profile.errors:
+            rows = "\n".join("  - " + error for error in profile.errors)
+            self.emit(f"Agent profile {profile.name}{location} is invalid:\n{rows}")
+            return
+        if profile.warnings:
+            rows = "\n".join("  - " + warning for warning in profile.warnings)
+            self.emit(f"Agent profile {profile.name}{location} loaded with warnings:\n{rows}")
+            return
+        self.emit(f"Agent profile {profile.name}{location} loaded.")
 
     @classmethod
     def agent_transcript_lines(cls, snapshot: Json) -> list[str]:

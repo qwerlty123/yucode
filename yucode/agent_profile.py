@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import json
 import os
 import re
 from dataclasses import dataclass, replace
@@ -48,7 +49,23 @@ class AgentProfileLibrary:
     """合并内置、用户和项目档案；后加载来源覆盖前一来源。"""
 
     FRONTMATTER = re.compile(r"^---\n(.*?)\n---\n?(.*)$", re.DOTALL)
-    META_LINE = re.compile(r"^([A-Za-z0-9_-]+):[ \t]*(.*)$", re.MULTILINE)
+    META_LINE = re.compile(r"^([A-Za-z0-9_-]+):[ \t]*(.*)$")
+    FIELDS = frozenset(
+        {
+            "name",
+            "description",
+            "tools",
+            "disallowed_tools",
+            "model",
+            "background",
+            "isolation",
+            "context",
+            "max_steps",
+            "timeout_seconds",
+            "skills",
+        }
+    )
+    LIST_FIELDS = frozenset({"tools", "disallowed_tools", "skills"})
 
     NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 
@@ -145,19 +162,31 @@ Return an ordered implementation plan that another Agent can execute without rep
         if match is None:
             return AgentProfile(folder, "", text.strip(), source=source, path=path, errors=("缺少 frontmatter",))
         metadata, body = match.group(1), match.group(2).strip()
-        fields = {key.replace("-", "_"): cls.scalar(value) for key, value in cls.META_LINE.findall(metadata)}
-        name = fields.get("name", "").strip() or folder
-        description = fields.get("description", "").strip()
-        errors: list[str] = []
+        fields, errors = cls.parse_metadata(metadata)
+
+        def scalar_field(key: str, default: str = "") -> str:
+            value = fields.get(key, default)
+            if isinstance(value, tuple):
+                errors.append(f"{key} 必须是标量")
+                return default
+            return value
+
+        def list_field(key: str) -> tuple[str, ...]:
+            value = fields.get(key, "")
+            return value if isinstance(value, tuple) else cls.csv(value)
+
+        declared_name = scalar_field("name")
+        name = declared_name.strip() or folder
+        description = scalar_field("description").strip()
         warnings: list[str] = []
-        if not fields.get("name", "").strip():
+        if not declared_name.strip():
             errors.append("缺少 name")
         elif not cls.NAME.fullmatch(name):
             errors.append("name 必须由字母、数字、连字符或下划线组成，最长 64 字符")
         if not description:
             errors.append("缺少 description")
-        tools = ("*",) if "tools" not in fields else cls.csv(fields["tools"])
-        denied = cls.csv(fields.get("disallowed_tools", ""))
+        tools = ("*",) if "tools" not in fields else list_field("tools")
+        denied = list_field("disallowed_tools")
         known = set(session.tool_catalog.names if session.tool_catalog else ())
         for tool in (*(() if tools == ("*",) else tools), *denied):
             if tool not in known:
@@ -165,22 +194,22 @@ Return an ordered implementation plan that another Agent can execute without rep
         overlap = sorted(set(tools).intersection(denied)) if tools != ("*",) else []
         if overlap:
             errors.append("工具同时出现在允许和禁止列表: " + ", ".join(overlap))
-        model = fields.get("model", "inherit").strip() or "inherit"
+        model = scalar_field("model", "inherit").strip() or "inherit"
         available_models = {session.config.provider.model, *session.config.provider.available_models}
         if model != "inherit" and available_models and model not in available_models:
             errors.append(f"当前 provider 不提供模型: {model}")
-        isolation = fields.get("isolation", "shared").strip().lower() or "shared"
+        isolation = scalar_field("isolation", "shared").strip().lower() or "shared"
         if isolation not in {"shared", "worktree"}:
             errors.append("isolation 必须是 shared 或 worktree")
             isolation = "shared"
-        context = fields.get("context", "fresh").strip().lower() or "fresh"
+        context = scalar_field("context", "fresh").strip().lower() or "fresh"
         if context not in {"fresh", "fork"}:
             errors.append("context 必须是 fresh 或 fork")
             context = "fresh"
-        background = cls.boolean(fields.get("background", "false"), "background", errors)
-        max_steps = cls.integer(fields.get("max_steps", "0"), "max_steps", errors, minimum=0)
-        timeout = cls.integer(fields.get("timeout_seconds", "0"), "timeout_seconds", errors, minimum=0)
-        skills = cls.csv(fields.get("skills", ""))
+        background = cls.boolean(scalar_field("background", "false"), "background", errors)
+        max_steps = cls.integer(scalar_field("max_steps", "0"), "max_steps", errors, minimum=0)
+        timeout = cls.integer(scalar_field("timeout_seconds", "0"), "timeout_seconds", errors, minimum=0)
+        skills = list_field("skills")
         installed = {skill.name.casefold() for skill in session.skills.all()} if session.skills else set()
         for skill in skills:
             if skill.casefold() not in installed:
@@ -204,16 +233,211 @@ Return an ordered implementation plan that another Agent can execute without rep
             warnings=tuple(dict.fromkeys(warnings)),
         )
 
-    @staticmethod
-    def scalar(value: str) -> str:
-        value = value.strip()
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
-            value = value[1:-1]
-        return value.strip()
+    @classmethod
+    def parse_metadata(cls, metadata: str) -> tuple[dict[str, str | tuple[str, ...]], list[str]]:
+        """解析 AGENT.md 使用到的 YAML 子集，并把歧义输入留作可定位的校验错误。"""
+
+        lines = metadata.splitlines()
+        fields: dict[str, str | tuple[str, ...]] = {}
+        errors: list[str] = []
+        index = 0
+        while index < len(lines):
+            raw = lines[index]
+            line_number = index + 2  # 文件首行是 frontmatter 起始分隔符。
+            stripped = raw.strip()
+            if not stripped or stripped.startswith("#"):
+                index += 1
+                continue
+            if raw[:1].isspace():
+                errors.append(f"第 {line_number} 行存在无归属的缩进内容")
+                index += 1
+                continue
+            match = cls.META_LINE.fullmatch(raw)
+            if match is None:
+                errors.append(f"第 {line_number} 行不是有效的 key: value")
+                index += 1
+                continue
+            source_key, raw_value = match.groups()
+            key = source_key.replace("-", "_")
+            if key not in cls.FIELDS:
+                errors.append(f"第 {line_number} 行包含未知字段: {source_key}")
+            duplicate = key in fields
+            if duplicate:
+                errors.append(f"第 {line_number} 行重复定义字段: {key}")
+            value, index = cls.metadata_value(lines, index, key, raw_value, errors)
+            if not duplicate:
+                fields[key] = value
+        return fields, errors
+
+    @classmethod
+    def metadata_value(
+        cls,
+        lines: list[str],
+        index: int,
+        field: str,
+        raw_value: str,
+        errors: list[str],
+    ) -> tuple[str | tuple[str, ...], int]:
+        line_number = index + 2
+        value = cls.strip_comment(raw_value).strip()
+        if value in {"|", ">"}:
+            block, next_index = cls.indented_block(lines, index + 1, field, errors)
+            text = "\n".join(block).rstrip() if value == "|" else " ".join(line.strip() for line in block if line.strip())
+            return text, next_index
+        if not value:
+            block, next_index = cls.indented_block(lines, index + 1, field, errors)
+            if block:
+                return cls.block_list(block, field, line_number, errors), next_index
+            return (() if field in cls.LIST_FIELDS else ""), next_index
+        if value.startswith("["):
+            if not value.endswith("]"):
+                errors.append(f"第 {line_number} 行的 {field} 行内列表缺少 ]")
+                return (), index + 1
+            return cls.list_value(value[1:-1], field, line_number, errors), index + 1
+        if value.endswith("]"):
+            errors.append(f"第 {line_number} 行的 {field} 行内列表缺少 [")
+            return (), index + 1
+        if field in cls.LIST_FIELDS:
+            return cls.list_value(value, field, line_number, errors), index + 1
+        return cls.scalar_value(value, field, line_number, errors), index + 1
+
+    @classmethod
+    def indented_block(cls, lines: list[str], start: int, field: str, errors: list[str]) -> tuple[list[str], int]:
+        """消费紧随字段的缩进块；空行可位于块内，但不会吞掉下一个顶层字段。"""
+
+        index = start
+        raw_block: list[tuple[int, str]] = []
+        while index < len(lines):
+            raw = lines[index]
+            if raw and not raw[:1].isspace():
+                break
+            raw_block.append((index + 2, raw))
+            index += 1
+        if not any(raw.strip() for _line, raw in raw_block):
+            return [], index
+        block: list[str] = []
+        for line_number, raw in raw_block:
+            if not raw.strip():
+                block.append("")
+                continue
+            prefix = raw[: len(raw) - len(raw.lstrip())]
+            if "\t" in prefix:
+                errors.append(f"第 {line_number} 行的 {field} 必须使用空格缩进")
+            block.append(raw.lstrip(" \t"))
+        while block and not block[-1]:
+            block.pop()
+        return block, index
+
+    @classmethod
+    def block_list(cls, block: list[str], field: str, line_number: int, errors: list[str]) -> tuple[str, ...]:
+        values: list[str] = []
+        for offset, raw in enumerate(block, 1):
+            stripped = raw.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            if not stripped.startswith("-") or (len(stripped) > 1 and not stripped[1].isspace()):
+                errors.append(f"第 {line_number + offset} 行的 {field} 列表项必须以 - 开头")
+                continue
+            value = cls.strip_comment(stripped[1:]).strip()
+            if not value:
+                errors.append(f"第 {line_number + offset} 行的 {field} 列表项不能为空")
+                continue
+            values.append(cls.scalar_value(value, field, line_number + offset, errors))
+        return tuple(dict.fromkeys(value for value in values if value))
+
+    @classmethod
+    def list_value(cls, value: str, field: str, line_number: int, errors: list[str]) -> tuple[str, ...]:
+        values: list[str] = []
+        quote = ""
+        escaped = False
+        start = 0
+        for index, character in enumerate(value):
+            if escaped:
+                escaped = False
+                continue
+            if character == "\\" and quote == '"':
+                escaped = True
+                continue
+            if quote:
+                if character == quote:
+                    quote = ""
+                continue
+            if character in "\"'":
+                quote = character
+            elif character == ",":
+                cls.append_list_item(values, value[start:index], field, line_number, errors)
+                start = index + 1
+        if quote:
+            errors.append(f"第 {line_number} 行的 {field} 包含未闭合引号")
+        cls.append_list_item(values, value[start:], field, line_number, errors, allow_empty=not value.strip())
+        return tuple(dict.fromkeys(values))
+
+    @classmethod
+    def append_list_item(
+        cls,
+        values: list[str],
+        raw: str,
+        field: str,
+        line_number: int,
+        errors: list[str],
+        *,
+        allow_empty: bool = False,
+    ) -> None:
+        value = cls.strip_comment(raw).strip()
+        if not value:
+            if not allow_empty:
+                errors.append(f"第 {line_number} 行的 {field} 列表包含空项")
+            return
+        parsed = cls.scalar_value(value, field, line_number, errors)
+        if parsed:
+            values.append(parsed)
 
     @staticmethod
-    def csv(value: str) -> tuple[str, ...]:
-        return tuple(dict.fromkeys(item.strip() for item in value.split(",") if item.strip()))
+    def strip_comment(value: str) -> str:
+        quote = ""
+        escaped = False
+        for index, character in enumerate(value):
+            if escaped:
+                escaped = False
+                continue
+            if character == "\\" and quote == '"':
+                escaped = True
+                continue
+            if quote:
+                if character == quote:
+                    quote = ""
+                continue
+            if character in "\"'":
+                quote = character
+            elif character == "#" and (index == 0 or value[index - 1].isspace()):
+                return value[:index]
+        return value
+
+    @staticmethod
+    def scalar_value(value: str, field: str, line_number: int, errors: list[str]) -> str:
+        value = value.strip()
+        if not value or value[0] not in "\"'":
+            return value
+        quote = value[0]
+        if len(value) < 2 or value[-1] != quote:
+            errors.append(f"第 {line_number} 行的 {field} 包含未闭合引号")
+            return value.lstrip(quote)
+        if quote == "'":
+            return value[1:-1].replace("''", "'").strip()
+        try:
+            parsed = json.loads(value)
+        except (TypeError, ValueError):
+            errors.append(f"第 {line_number} 行的 {field} 包含无效双引号转义")
+            return value[1:-1].strip()
+        return str(parsed).strip()
+
+    @classmethod
+    def scalar(cls, value: str) -> str:
+        return cls.scalar_value(cls.strip_comment(value).strip(), "metadata", 0, [])
+
+    @classmethod
+    def csv(cls, value: str) -> tuple[str, ...]:
+        return cls.list_value(value, "metadata", 0, [])
 
     @staticmethod
     def boolean(value: str, field: str, errors: list[str]) -> bool:
@@ -327,17 +551,23 @@ Return an ordered implementation plan that another Agent can execute without rep
 
     @staticmethod
     def serialize(profile: AgentProfile, name: str) -> str:
+        def scalar(value: str) -> str:
+            return json.dumps(value, ensure_ascii=False)
+
+        def sequence(values: tuple[str, ...]) -> str:
+            return "[" + ", ".join(scalar(value) for value in values) + "]"
+
         rows = [
             "---",
-            f"name: {name}",
-            f"description: {profile.description or '自定义子 Agent'}",
-            "tools: " + ", ".join(profile.tools),
+            f"name: {scalar(name)}",
+            f"description: {scalar(profile.description or '自定义子 Agent')}",
+            "tools: " + sequence(profile.tools),
         ]
         if profile.disallowed_tools:
-            rows.append("disallowed_tools: " + ", ".join(profile.disallowed_tools))
+            rows.append("disallowed_tools: " + sequence(profile.disallowed_tools))
         rows.extend(
             [
-                f"model: {profile.model}",
+                f"model: {scalar(profile.model)}",
                 f"background: {'true' if profile.background else 'false'}",
                 f"isolation: {profile.isolation}",
                 f"context: {profile.context}",
@@ -348,6 +578,6 @@ Return an ordered implementation plan that another Agent can execute without rep
         if profile.timeout_seconds:
             rows.append(f"timeout_seconds: {profile.timeout_seconds}")
         if profile.skills:
-            rows.append("skills: " + ", ".join(profile.skills))
+            rows.append("skills: " + sequence(profile.skills))
         rows.extend(["---", profile.prompt or "完成委派任务并返回可验证结果。", ""])
         return "\n".join(rows)
