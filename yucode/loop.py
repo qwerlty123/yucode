@@ -214,6 +214,7 @@ class CommandLoop:
     HELP_ENTRY_RE: ClassVar[re.Pattern] = re.compile(r"^- (.+?) — ", re.MULTILINE)  # 帮助文本的命令条目
     QUEUE_EMPTY_HINT = "Enter queues follow-up · Ctrl-C interrupts"
     QUEUE_PENDING_HINT = "↑ recalls queued · Ctrl-C interrupts"
+    SUBAGENT_DETACH_HINT = "Ctrl+B backgrounds agent"
     TRANSCRIPT_DIFF_LINES: ClassVar[int] = 40  # 回放时每个 Edit diff 预览的最大行数
     SUBAGENT_TRANSCRIPT_LINES: ClassVar[int] = 4000  # 子转录查看器的渲染上限；完整 JSONL 仍保留在磁盘
     EDITOR_CONTEXT_MAX_LINES: ClassVar[int] = 200  # 外部编辑器上下文的最大行数
@@ -675,7 +676,11 @@ Agent, AgentTask, Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall,
         if self.tui.input_mode == "running":
             with self.session._queue_lock:
                 has_pending = any(not item.inflight for item in self.session.pending_user_inputs)
-            return self.QUEUE_PENDING_HINT if has_pending else self.QUEUE_EMPTY_HINT
+            hint = self.QUEUE_PENDING_HINT if has_pending else self.QUEUE_EMPTY_HINT
+            runtime = self.session.subagents
+            if runtime is not None and runtime.foreground_task() is not None:
+                hint += " · " + self.SUBAGENT_DETACH_HINT
+            return hint
         if self.tui.input_mode == "chat":
             return self._hint_picker.pick(self._hint_context(), self.session.state.round_count)
         return ""

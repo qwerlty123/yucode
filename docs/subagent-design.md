@@ -42,7 +42,7 @@ yucode 的子 Agent 是完整的本地“委派—执行—回传”运行时。
 /agents resume agent-1234abcd5678 -- 根据失败结果继续修复
 ```
 
-交互终端中直接输入 `/agents` 会打开 Tasks/Library 双标签管理器。前台任务执行时按 Ctrl+B 会让原 `Agent` tool call 返回后台 task 信息，worker 本身不会中断。
+交互终端中直接输入 `/agents` 会打开 Tasks/Library 双标签管理器。根会话实际等待前台任务时，运行输入行会显示 Ctrl+B 提示；按下后原 `Agent` tool call 返回后台 task 信息，worker 本身不会中断。普通运行和纯后台任务不会显示这条提示。
 
 ## `Agent` 工具
 

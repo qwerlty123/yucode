@@ -384,13 +384,23 @@ def test_detach_releases_foreground_wait_but_keeps_the_worker_running(tmp_path):
     runtime = SubagentRuntime(root, executor=execute)
     task = runtime.start(AgentSpec("前台", "执行"))
     assert started.wait(timeout=1)
+    returned = []
+    waiter = threading.Thread(target=lambda: returned.append(runtime.wait_foreground(task.task_id, timeout_seconds=1)))
+    waiter.start()
+    deadline = time.monotonic() + 1
+    while runtime.foreground_task() is None and time.monotonic() < deadline:
+        time.sleep(0.01)
 
-    detached = runtime.detach(task.task_id)
-    returned = runtime.wait_foreground(task.task_id, timeout_seconds=1)
+    foreground = runtime.foreground_task()
+    detached = runtime.detach_foreground()
+    waiter.join(timeout=1)
 
+    assert foreground is not None and foreground.task_id == task.task_id
+    assert detached is not None
     assert detached.run_in_background is True
-    assert returned.run_in_background is True
-    assert returned.status == "running"
+    assert returned[0].run_in_background is True
+    assert returned[0].status == "running"
+    assert runtime.foreground_task() is None
     release.set()
     assert runtime.wait(task.task_id, timeout_seconds=2).status == "completed"
     runtime.close()

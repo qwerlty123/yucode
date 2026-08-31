@@ -525,6 +525,20 @@ class SubagentRuntime:
         with self._lock:
             return self._require(task_id).view()
 
+    def foreground_task(self) -> AgentTaskView | None:
+        """返回根 Agent 当前真正阻塞等待的前台任务，供 TUI 决定是否展示 detach 提示。"""
+
+        with self._lock:
+            task = next(
+                (
+                    self._tasks[task_id]
+                    for task_id in reversed(self._foreground_waiting)
+                    if task_id in self._tasks and self._tasks[task_id].status in self.ACTIVE and not self._tasks[task_id].run_in_background
+                ),
+                None,
+            )
+            return task.view() if task is not None else None
+
     def details(self, task_id: str) -> Json:
         with self._lock:
             task = self._require(task_id)

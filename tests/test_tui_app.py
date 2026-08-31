@@ -691,6 +691,20 @@ def test_tui_running_queue_hint_shows_recall_and_interrupt(tmp_path):
     assert command_loop.tui_input_hint() == "↑ recalls queued · Ctrl-C interrupts"
 
 
+def test_tui_running_hint_only_shows_control_b_for_a_waited_foreground_agent(tmp_path):
+    command_loop = loop(tmp_path)
+    command_loop.tui = TuiApp()
+    command_loop.tui.set_running("working")
+    runtime = command_loop.session.subagents
+    assert runtime is not None
+
+    runtime.foreground_task = lambda: SimpleNamespace(task_id="agent-hint")
+    assert "Ctrl+B backgrounds agent" in command_loop.tui_input_hint()
+
+    runtime.foreground_task = lambda: None
+    assert "Ctrl+B" not in command_loop.tui_input_hint()
+
+
 def test_tui_chat_input_shows_random_idle_placeholder(tmp_path):
     command_loop = loop(tmp_path)
     command_loop.tui = TuiApp()
