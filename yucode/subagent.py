@@ -15,10 +15,10 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass, field, replace
 
 from yucode.agent_profile import AgentProfile, AgentProfileLibrary
-from yucode.base import DISMISSED, Json, ProviderConfig, Text, ToolError
+from yucode.base import DISMISSED, Json, LogBlock, ProviderConfig, Text, ToolError, YucodeError
 from yucode.engine import Agent, AgentOutcome
 from yucode.prompts import LIVE_FOLLOWUP_PREFIX
-from yucode.session import Session, SessionSnapshotStore, local_timestamp
+from yucode.session import Session, SessionSnapshotCodec, SessionSnapshotStore, local_timestamp
 from yucode.skill import Skill, SkillLibrary
 from yucode.workspace import WorktreeManager
 
@@ -236,11 +236,12 @@ class SubagentStore:
         del attempt  # 所有 attempt 追加到同一 sidechain，resume 才能保留完整对话。
         return os.path.join(self.directory, task_id + ".jsonl")
 
-    def save(self, task: _TaskRecord) -> None:
+    def save(self, task: _TaskRecord, *, append_registry: bool = True) -> None:
         payload = task.to_json()
         with self._lock:
             os.makedirs(self.directory, exist_ok=True)
-            SessionSnapshotStore.write_jsonl(self.registry_path, payload, mode="a")
+            if append_registry:
+                SessionSnapshotStore.write_jsonl(self.registry_path, payload, mode="a")
             path = os.path.join(self.directory, task.task_id + ".meta.json")
             temp = path + ".tmp"
             SessionSnapshotStore.write_jsonl(temp, payload, mode="w")
@@ -537,6 +538,49 @@ class SubagentRuntime:
                     {**task.view().to_json(), "prompt": task.prompt, "recent_activity": list(task.activities)},
                 ],
             }
+
+    def transcript(self, task_id: str) -> Json:
+        """返回 child 已持久化的只读转录视图；活动任务先做一次线程安全快照。"""
+
+        with self._lock:
+            task = self._require(task_id)
+            child = task.child
+            path = self.store.transcript_path(task.task_id, task.attempt)
+            header = {
+                "task_id": task.task_id,
+                "attempt": task.attempt,
+                "status": task.status,
+                "description": task.description,
+                "prompt": task.prompt,
+                "profile": task.profile.name,
+                "model": task.model,
+                "steps": task.steps,
+                "tool_calls": task.tool_calls,
+                "usage": dict(task.usage),
+                "elapsed_ms": task.view().elapsed_ms,
+            }
+        if child is not None:
+            # 查看器不能因为一次快照写入失败而打断正在执行的 child；下面仍可回退到内存视图。
+            with contextlib.suppress(OSError, TypeError, ValueError, YucodeError):
+                child.save_snapshot()
+        try:
+            data, _blobs, _snapshot_header = SessionSnapshotStore.read_merged(path)
+            messages = SessionSnapshotCodec.persistable_messages(list(data.get("messages") or ()))
+            records = list(data.get("tool_records") or ())
+            errors = list(data.get("tool_errors") or ())
+        except (OSError, TypeError, ValueError, YucodeError):
+            if child is None:
+                messages, records, errors = [], [], []
+            else:
+                messages = copy.deepcopy([*child.messages, *child._active_turn_messages])
+                records = [asdict(record) for record in child.tool_records]
+                errors = [asdict(error) for error in child.tool_errors]
+        return {
+            **header,
+            "messages": [message for message in messages if not SessionSnapshotCodec.is_internal_message(message)],
+            "tool_records": records,
+            "tool_errors": errors,
+        }
 
     def wait(self, task_id: str, timeout_seconds: float | None = None) -> AgentTaskView:
         deadline = None if timeout_seconds is None else time.monotonic() + max(0.0, min(120.0, timeout_seconds))
@@ -995,7 +1039,7 @@ class SubagentRuntime:
         task_id = child.uid
         with self._lock:
             task = self._require(task_id)
-        agent = Agent(child, input_fn=lambda _prompt: "n", output_fn=lambda text: self._activity(task, str(text)))
+        agent = Agent(child, input_fn=lambda _prompt: "n", output_fn=lambda value: self._activity(task, value))
         agent.tools.confirmation_fn = lambda call, _tool, preview: self._confirm(task, call.name, call.args, preview)
         agent.tools.question_fn = lambda spec, position: self.interactions.request(
             task.task_id,
@@ -1027,17 +1071,33 @@ class SubagentRuntime:
         lower = answer.lower()
         return (True, "") if lower in {"", "y", "yes"} else (False, "" if lower in {"n", "no"} else answer)
 
-    def _activity(self, task: _TaskRecord, text: str) -> None:
-        text = " ".join(text.split())
-        if not text:
+    def _activity(self, task: _TaskRecord, value: object) -> None:
+        detail = Text.clean(str(value)).strip()
+        preview = " ".join(detail.split())
+        if not preview:
             return
+        activity: Json = {
+            "at": local_timestamp(),
+            "kind": "tool" if isinstance(value, LogBlock) else "message",
+            "text": preview[-1000:],
+            "detail": detail[-8000:],
+        }
+        if isinstance(value, LogBlock):
+            first = next(value.walk(), None)
+            if first is not None:
+                line, _level = first
+                label = " ".join(part for part in (line.label, line.text, line.meta) if part).strip()
+                if label:
+                    activity["label"] = label[:1000]
         with self._lock:
-            task.partial_result = text[-1000:]
-            task.activities.append({"at": local_timestamp(), "text": task.partial_result})
+            task.partial_result = str(activity["text"])
+            task.activities.append(activity)
             task.activities = task.activities[-20:]
             if task.child is not None:
                 self._collect_metrics(task, task.child)
-            task.revision += 1  # 活动本身不刷磁盘，但观察者必须能把它识别为一次状态变化。
+            task.revision += 1
+            # 活动频率高于状态迁移：只原子更新 meta，既保证崩溃后可见，又不让 append-only registry 快速膨胀。
+            self.store.save(task, append_registry=False)
             self._event(task, "activity", task.partial_result)
             self._changed.notify_all()
 

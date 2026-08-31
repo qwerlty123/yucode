@@ -1223,6 +1223,58 @@ def test_agents_manager_can_steer_an_active_task(tmp_path):
     runtime.close()
 
 
+def test_agents_manager_can_open_a_scrollable_child_transcript(tmp_path):
+    s = session(tmp_path)
+    s.config.provider.model = "test-model"
+
+    def execute(child, _prompt):
+        arguments = json.dumps({"files": [{"path": "a.py", "ranges": [[1, 2]]}]})
+        key = child.store_tool_result("Read", [{"path": "a.py", "ranges": [[1, 2]]}], "第一行\n第二行", "a.py 1:2")
+        child.messages.extend(
+            [
+                {"role": "user", "content": "检查文件"},
+                {
+                    "role": "assistant",
+                    "content": "正在读取",
+                    "tool_calls": [{"id": "read-1", "type": "function", "function": {"name": "Read", "arguments": arguments}}],
+                },
+                {"role": "tool", "tool_call_id": "read-1", "content": key},
+                {"role": "assistant", "content": "检查完成"},
+            ]
+        )
+        child.save_snapshot()
+        return "完成"
+
+    runtime = SubagentRuntime(s, executor=execute)
+    task = runtime.spawn(AgentSpec("转录查看", "检查代码", run_in_background=True))
+    assert runtime.wait(task.task_id, 2).status == "completed"
+    command_loop = CommandLoop(Agent(s, output_fn=lambda _text: None), input_fn=lambda _prompt: "", output_fn=lambda _text: None)
+
+    class Modal:
+        manager_calls = 0
+        transcript = ""
+
+        def show_modal(self, fragments_fn, key_fn, *, exclusive=False):
+            rendered = "".join(text for _style, text in fragments_fn())
+            if exclusive:
+                self.transcript = rendered
+                return key_fn("q", "")
+            self.manager_calls += 1
+            return key_fn("v", "") if self.manager_calls == 1 else None
+
+    modal = Modal()
+    command_loop.tui = modal
+    command_loop.agents_manager(runtime)
+
+    assert "Sub-agent transcript" in modal.transcript
+    assert "[user] 检查文件" in modal.transcript
+    assert "[assistant] 正在读取" in modal.transcript
+    assert "[tool call] Read" in modal.transcript
+    assert "[tool result] Read · a.py 1:2" in modal.transcript
+    assert "第一行" in modal.transcript and "第二行" in modal.transcript
+    runtime.close()
+
+
 def test_stale_subagent_interaction_does_not_open_ui(tmp_path):
     s = session(tmp_path)
     request = {

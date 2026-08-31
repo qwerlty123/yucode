@@ -6,7 +6,7 @@ import pytest
 from agent_harness import session
 from PIL import Image
 
-from yucode.base import Config, ProviderConfig, ToolError
+from yucode.base import Config, LogBlock, LogLine, ProviderConfig, ToolError
 from yucode.context import ContextManager
 from yucode.engine import Agent
 from yucode.session import HistorySegment
@@ -441,6 +441,8 @@ def test_wait_change_returns_when_runtime_publishes_new_activity(tmp_path):
     task = runtime.start(AgentSpec("进度", "执行", run_in_background=True))
     assert started.wait(timeout=1)
     before = runtime.get(task.task_id).revision
+    with open(runtime.store.registry_path, encoding="utf-8") as handle:
+        registry_lines = len(handle.readlines())
     observed = []
     waiter = threading.Thread(target=lambda: observed.append(runtime.wait_change(task.task_id, 1)))
     waiter.start()
@@ -452,9 +454,60 @@ def test_wait_change_returns_when_runtime_publishes_new_activity(tmp_path):
     assert not waiter.is_alive()
     assert observed[0].revision > before
     assert observed[0].partial_result == "正在检查"
-    assert runtime.details(task.task_id)["recent_activity"][-1]["text"] == "正在检查"
+    activity = runtime.details(task.task_id)["recent_activity"][-1]
+    assert activity["kind"] == "message"
+    assert activity["text"] == "正在检查"
+    assert activity["detail"] == "正在检查"
+    # 高频进度只更新原子 meta；重建后仍可见，但不会把 append-only registry 撑大。
+    persisted = runtime.store.load()[task.task_id]
+    assert persisted.activities[-1] == activity
+    with open(runtime.store.registry_path, encoding="utf-8") as handle:
+        assert len(handle.readlines()) == registry_lines
+
+    runtime._activity(runtime._tasks[task.task_id], LogBlock([LogLine("Read", "a.py", meta=" · done")]))
+    tool_activity = runtime.details(task.task_id)["recent_activity"][-1]
+    assert tool_activity["kind"] == "tool"
+    assert tool_activity["label"] == "Read a.py  · done"
+    assert "a.py" in tool_activity["detail"]
     release.set()
     runtime.wait(task.task_id, 2)
+    runtime.close()
+
+
+def test_subagent_transcript_reads_saved_messages_results_and_errors(tmp_path):
+    root = session(tmp_path)
+    root.config.provider.model = "test-model"
+
+    def execute(child, _prompt):
+        arguments = '{"files":[{"path":"a.py","ranges":[[1,2]]}]}'
+        result_key = child.store_tool_result("Read", [{"path": "a.py", "ranges": [[1, 2]]}], "line one\nline two", "a.py 1:2")
+        child.record_tool_error("-", "Bash", ["false"], "command failed")
+        child.messages.extend(
+            [
+                {"role": "user", "content": "检查 a.py"},
+                {
+                    "role": "assistant",
+                    "content": "先读取文件",
+                    "tool_calls": [{"id": "read-1", "type": "function", "function": {"name": "Read", "arguments": arguments}}],
+                },
+                {"role": "tool", "tool_call_id": "read-1", "content": result_key},
+                {"role": "assistant", "content": "检查完成"},
+            ]
+        )
+        child.save_snapshot()
+        return "完成"
+
+    runtime = SubagentRuntime(root, executor=execute)
+    task = runtime.spawn(AgentSpec("转录", "检查代码", run_in_background=True))
+    assert runtime.wait(task.task_id, 2).status == "completed"
+
+    transcript = runtime.transcript(task.task_id)
+
+    assert transcript["task_id"] == task.task_id
+    assert transcript["description"] == "转录"
+    assert [message["role"] for message in transcript["messages"]] == ["user", "assistant", "tool", "assistant"]
+    assert transcript["tool_records"][0]["output"] == "line one\nline two"
+    assert transcript["tool_errors"][0]["error"] == "command failed"
     runtime.close()
 
 

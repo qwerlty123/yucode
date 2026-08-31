@@ -215,6 +215,7 @@ class CommandLoop:
     QUEUE_EMPTY_HINT = "Enter queues follow-up · Ctrl-C interrupts"
     QUEUE_PENDING_HINT = "↑ recalls queued · Ctrl-C interrupts"
     TRANSCRIPT_DIFF_LINES: ClassVar[int] = 40  # 回放时每个 Edit diff 预览的最大行数
+    SUBAGENT_TRANSCRIPT_LINES: ClassVar[int] = 4000  # 子转录查看器的渲染上限；完整 JSONL 仍保留在磁盘
     EDITOR_CONTEXT_MAX_LINES: ClassVar[int] = 200  # 外部编辑器上下文的最大行数
     INPUT_HISTORY_BYTES: ClassVar[int] = 512 * 1024  # 输入历史文件大小上限(512KB)
     # fmt: off
@@ -645,7 +646,9 @@ Agent, AgentTask, Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall,
         for task in visible[:4]:
             badge = " ?" if task.status == "waiting_interaction" else ""
             activity = " ".join((task.partial_result or task.result or task.error or task.description).split())
-            lines.append(Text.clip_width(f"agent {task.task_id} · {task.status}{badge} · {task.profile} · {activity}", width))
+            tokens = task.usage.get("total_tokens", 0)
+            metrics = f"{task.tool_calls} tools · {tokens}t"
+            lines.append(Text.clip_width(f"agent {task.task_id} · {task.status}{badge} · {task.profile} · {metrics} · {activity}", width))
         if len(visible) > 4:
             lines.append(f"agent … {len(visible) - 4} more active or awaiting delivery")
         return lines
@@ -1754,7 +1757,7 @@ Agent, AgentTask, Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall,
                 if tab == 0:
                     badge = " ?" if item.status == "waiting_interaction" else ""
                     tokens = item.usage.get("total_tokens", 0)
-                    text = f"{item.task_id}  {item.status}{badge}  {item.profile}  {item.elapsed_ms / 1000:.1f}s  {tokens}t"
+                    text = f"{item.task_id}  {item.status}{badge}  {item.profile}  {item.elapsed_ms / 1000:.1f}s  {tokens}t  {item.tool_calls} tools"
                 else:
                     validity = "valid" if item.valid else "invalid"
                     text = f"{item.name}  {item.source}  {validity}  {item.description}"
@@ -1766,12 +1769,24 @@ Agent, AgentTask, Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall,
                 parts.append(("", "\n"))
                 if tab == 0:
                     detail = runtime.details(item.task_id)
+                    recent = list(detail.get("recent_activity") or ())[-3:]
+                    metrics = (
+                        f"attempt {detail['attempt']} · {detail['steps']} steps · {detail['tool_calls']} tools · "
+                        f"{detail['usage'].get('total_tokens', 0)} tokens · {detail['elapsed_ms'] / 1000:.1f}s"
+                    )
                     rows = [
                         f"description  {detail['description']}",
+                        f"metrics      {metrics}",
+                        f"mode         {detail['profile']} · {detail['model']} · {detail['isolation']} · {detail['context']}",
                         f"activity     {' '.join(str(detail['current_activity'] or '(none)').split())}",
+                        *(f"recent       {activity.get('at', '')}  {activity.get('label') or activity.get('text') or ''}" for activity in recent),
                         f"result       {' '.join(str(detail['result'] or detail['error'] or '(pending)').split())}",
                         f"workspace    {detail['workspace'].get('path') or detail['workspace'].get('mode') or '(pending)'}",
                     ]
+                    if detail.get("stop_reason"):
+                        rows.append("stop reason  " + str(detail["stop_reason"]))
+                    if detail.get("warnings"):
+                        rows.append("warnings     " + "; ".join(str(warning) for warning in detail["warnings"]))
                     if detail.get("pending_interaction", {}).get("status") == "pending":
                         interaction = str(detail["pending_interaction"].get("question") or detail["pending_interaction"].get("tool_name"))
                         rows.append("interaction  " + " ".join(interaction.split()))
@@ -1785,7 +1800,7 @@ Agent, AgentTask, Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall,
                     ]
                 parts.extend(("ansibrightblack", "  " + Text.clip_width(row, width - 2) + "\n") for row in rows)
             hint = (
-                "↑/↓ move · ←/→/Tab switch · Enter answer · g steer · u resume · s stop · d clean · x close · r refresh · Esc/q close"
+                "↑/↓ move · ←/→/Tab switch · v transcript · Enter answer · g steer · u resume · s stop · d clean · x close · r refresh · Esc/q close"
                 if tab == 0
                 else "↑/↓ move · ←/→/Tab switch · n new · e edit · c copy · d delete · r reload · Esc/q close"
             )
@@ -1807,6 +1822,8 @@ Agent, AgentTask, Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall,
                 return ("reload",)
             elif tab == 0 and items:
                 task = items[selected[tab]]
+                if key == "v":
+                    return ("view", task.task_id)
                 if key == "enter" and task.pending_interaction.get("status") == "pending":
                     return ("respond", task.task_id)
                 if key == "s" and task.status in runtime.ACTIVE:
@@ -1840,6 +1857,8 @@ Agent, AgentTask, Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall,
             try:
                 if kind == "reload":
                     runtime.reload_profiles()
+                elif kind == "view":
+                    self.agent_transcript_viewer(runtime, action[1])
                 elif kind == "stop":
                     runtime.stop(action[1])
                 elif kind == "steer":
@@ -1898,6 +1917,114 @@ Agent, AgentTask, Read, ViewImage, InspectCode, Search, Edit, Bash, Job, Recall,
                             runtime.reload_profiles()
             except ToolError as error:
                 self.emit("Error: " + str(error))
+
+    @classmethod
+    def agent_transcript_lines(cls, snapshot: Json) -> list[str]:
+        """把现有 child 消息转成只读文本行；工具结果保持原文但限制查看器渲染规模。"""
+
+        lines = [
+            f"task      {snapshot.get('task_id')} · attempt {snapshot.get('attempt')} · {snapshot.get('status')}",
+            f"profile   {snapshot.get('profile')} · {snapshot.get('model')}",
+            (
+                f"metrics   {snapshot.get('steps', 0)} steps · {snapshot.get('tool_calls', 0)} tools · "
+                f"{dict(snapshot.get('usage') or {}).get('total_tokens', 0)} tokens · {int(snapshot.get('elapsed_ms', 0)) / 1000:.1f}s"
+            ),
+            f"objective {snapshot.get('description') or ''}",
+            "",
+        ]
+
+        def append(label: str, content: object) -> None:
+            text = Text.clean(str(content or "")).strip()
+            content_lines = text.splitlines() or [""]
+            lines.append(f"[{label}] {content_lines[0]}")
+            lines.extend("  " + line for line in content_lines[1:])
+
+        raw_records = snapshot.get("tool_records") or ()
+        records = [record for record in raw_records if isinstance(record, dict)]
+        record_index = 0
+        for message in snapshot.get("messages") or ():
+            if not isinstance(message, dict):
+                continue
+            role = str(message.get("role") or "message")
+            if role == "tool":
+                continue  # 工具消息只存引用键；下面从 tool_records 展示完整输出。
+            content = ImageInputs.label_text(message).strip()
+            if content:
+                append(role, content)
+            raw_calls = message.get("tool_calls")
+            if isinstance(raw_calls, list):
+                for raw_call in raw_calls:
+                    call = cls.transcript_tool_call(raw_call)
+                    if call is not None:
+                        append("tool call", f"{call.name} {json.dumps(call.args, ensure_ascii=False, separators=(',', ':'))}")
+                        tool_class = TOOL_REGISTRY.get(call.name)
+                        if tool_class is not None and not tool_class.STORES_RESULT:
+                            continue
+                        while record_index < len(records):
+                            record = records[record_index]
+                            record_index += 1
+                            if str(record.get("name") or "") != call.name:
+                                continue
+                            note = " · " + str(record.get("note")) if record.get("note") else ""
+                            append("tool result", f"{call.name}{note}\n{record.get('output') or ''}")
+                            break
+        for record in records[record_index:]:
+            name = str(record.get("name") or "tool")
+            note = " · " + str(record.get("note")) if record.get("note") else ""
+            append("tool result", f"{name}{note}\n{record.get('output') or ''}")
+        for error in snapshot.get("tool_errors") or ():
+            if not isinstance(error, dict):
+                continue
+            append("tool error", f"{error.get('name') or 'tool'}\n{error.get('error') or ''}")
+        if len(lines) > cls.SUBAGENT_TRANSCRIPT_LINES:
+            hidden = len(lines) - cls.SUBAGENT_TRANSCRIPT_LINES
+            lines = [f"… {hidden} earlier lines hidden; complete transcript remains in the task JSONL", "", *lines[-cls.SUBAGENT_TRANSCRIPT_LINES :]]
+        if len(lines) == 5:
+            lines.append("(transcript is not available yet)")
+        return lines
+
+    def agent_transcript_viewer(self, runtime, task_id: str) -> None:
+        """在现有 `/agents` 管理器内浏览 child transcript，不把内容复制进根 scrollback。"""
+
+        if self.tui is None:
+            return
+        state = TabbedViewState(("Transcript",))
+        snapshot = runtime.transcript(task_id)
+        lines = self.agent_transcript_lines(snapshot)
+
+        def viewport() -> int:
+            return max(3, shutil.get_terminal_size((100, 24)).lines - 5)
+
+        def fragments() -> StyleAndTextTuples:
+            width = max(20, shutil.get_terminal_size((100, 24)).columns - 4)
+            visible = state.visible(lines, viewport())
+            parts: StyleAndTextTuples = [("ansicyan", f"\n  Sub-agent transcript · {task_id}\n\n")]
+            for line in visible:
+                style = "ansicyan" if line.startswith("[") else "ansibrightblack"
+                parts.append((style, "  " + Text.clip_width(line, width - 2) + "\n"))
+            position = f"{state.scroll + 1 if lines else 0}-{min(len(lines), state.scroll + viewport())}/{len(lines)}"
+            parts.append(("class:choice.disabled", f"\n  ↑/↓ scroll · Ctrl-U/D half-page · PgUp/PgDn page · g/G ends · r refresh · Esc/q close [{position}]\n"))
+            return parts
+
+        def key_handler(key: str, _data: str) -> Any:
+            nonlocal snapshot, lines
+            height = viewport()
+            if key in {"q", "escape", "c-c"}:
+                return None
+            if key in {"down", "j", "up", "k"}:
+                state.scroll_by(1 if key in {"down", "j"} else -1)
+            elif key in {"pagedown", "pageup", "c-d", "c-u"}:
+                distance = max(1, height if key in {"pagedown", "pageup"} else height // 2)
+                state.scroll_by(distance if key in {"pagedown", "c-d"} else -distance)
+            elif key in {"g", "G"}:
+                state.scroll = 0 if key == "g" else 10**9
+            elif key == "r":
+                snapshot = runtime.transcript(task_id)
+                lines = self.agent_transcript_lines(snapshot)
+                state.scroll = 0
+            return TUI_MODAL_PENDING
+
+        self.tui.show_modal(fragments, key_handler, exclusive=True)
 
     def ps_command(self, args: str) -> str:
         if args.strip():
