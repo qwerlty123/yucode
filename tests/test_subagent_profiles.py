@@ -10,7 +10,32 @@ from yucode.engine import Agent
 from yucode.model import ModelClient
 from yucode.runner import ToolRunner
 from yucode.subagent import AgentSpec, SubagentRuntime
-from yucode.tools import ReadTool, Tool, ToolCatalog
+from yucode.tools import AgentTaskTool, AgentTool, ReadTool, Tool, ToolCatalog
+
+
+def test_agent_tool_describes_the_complete_delegation_contract():
+    agent_description = AgentTool.DESCRIPTION
+    task_description = AgentTaskTool.DESCRIPTION
+
+    assert "fresh child has no parent conversation" in agent_description
+    assert "do not poll, race the child, or invent its result" in agent_description
+    assert "multiple independent Agent calls in one response" in agent_description
+    assert "worktree isolates changes and excludes parent dirty content" in agent_description
+    assert "Do not poll background tasks" in task_description
+
+
+def test_builtin_profiles_define_role_process_and_output_contracts(tmp_path):
+    library = AgentProfileLibrary.load(session(tmp_path))
+    general = library.get("general-purpose")
+    explore = library.get("explore")
+    plan = library.get("plan")
+
+    assert general is not None and "Preserve unrelated working-tree changes" in general.prompt
+    assert "Verify changes in proportion to their risk" in general.prompt
+    assert explore is not None and "read-only codebase exploration specialist" in explore.prompt
+    assert "exact file paths and symbols" in explore.prompt
+    assert plan is not None and "decision-complete plan" in plan.prompt
+    assert "concrete files and symbols" in plan.prompt
 
 
 def test_session_tool_catalog_is_the_schema_and_execution_authority(tmp_path):

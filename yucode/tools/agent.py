@@ -28,9 +28,15 @@ def runtime_for(session) -> SubagentRuntime:
 class AgentTool(Tool):
     NAME = "Agent"
     DESCRIPTION = (
-        "Delegate a complete, independently verifiable task to a local sub-agent. "
-        "Use fresh context by default; choose worktree only when isolated changes are needed. "
-        "Multiple Agent calls in one response are launched together before foreground results are collected."
+        "Delegate a complete, independently verifiable, multi-step task to a local sub-agent. "
+        "Do not delegate a simple lookup in one known file or work whose result you already have. "
+        "A fresh child has no parent conversation: include the goal and why it matters, known facts, exact paths, scope, constraints, "
+        "whether it may write, required verification, and the expected report. A fork inherits a frozen parent snapshot, so give it a "
+        "precise directive and scope instead of repeating the conversation. Use foreground when later work depends on the result; use "
+        "background only for independent work. Background completion is delivered automatically: do not poll, race the child, or "
+        "invent its result. Put multiple independent Agent calls in one response so they launch together. shared sees the parent's dirty "
+        "checkout; worktree isolates changes and excludes parent dirty content. The root Agent remains responsible for synthesis, "
+        "verification, and the final user-facing answer."
     )
     PRODUCES_MODEL_OBSERVATION = True
 
@@ -38,13 +44,27 @@ class AgentTool(Tool):
     def params_schema(cls) -> Json:
         # fmt: off
         return cls.object_schema({
-            "description": {"type": "string", "description": "Short task name"},
-            "prompt": {"type": "string", "description": "Complete task contract, constraints, and acceptance requirements"},
+            "description": {"type": "string", "description": "Short task name describing the delegated outcome"},
+            "prompt": {
+                "type": "string",
+                "description": "Complete task contract: objective, context, scope, constraints, write permission, verification, and expected report",
+            },
             "subagent_type": {"type": "string", "description": "Agent profile name; default general-purpose"},
             "model": {"type": "string", "description": "Model from the current provider; default inherit"},
-            "run_in_background": {"type": "boolean", "description": "Return immediately with task_id"},
-            "isolation": {"type": "string", "enum": ["shared", "worktree"], "description": "Workspace mode"},
-            "context": {"type": "string", "enum": ["fresh", "fork"], "description": "Parent conversation inheritance"},
+            "run_in_background": {
+                "type": "boolean",
+                "description": "Return immediately with task_id; use only when the result is not needed for the current reasoning path",
+            },
+            "isolation": {
+                "type": "string",
+                "enum": ["shared", "worktree"],
+                "description": "shared uses the parent checkout; worktree isolates changes and excludes parent dirty content",
+            },
+            "context": {
+                "type": "string",
+                "enum": ["fresh", "fork"],
+                "description": "fresh starts without parent conversation; fork copies a frozen, detached parent snapshot",
+            },
         }, ["description", "prompt"])
         # fmt: on
 
@@ -118,7 +138,11 @@ class AgentTool(Tool):
 
 class AgentTaskTool(Tool):
     NAME = "AgentTask"
-    DESCRIPTION = "List, inspect, wait for, steer, stop, resume, or close a root Agent's local sub-agent tasks."
+    DESCRIPTION = (
+        "List, inspect, wait for, steer, stop, resume, or close a root Agent's local sub-agent tasks. "
+        "Do not poll background tasks: completion is delivered automatically. steer only changes an active task; resume explicitly creates "
+        "a new attempt from a terminal task's saved transcript."
+    )
     PRODUCES_MODEL_OBSERVATION = True
     STORES_RESULT = False
 
