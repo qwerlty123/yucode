@@ -4,34 +4,39 @@ The mock client factories intercept OpenAI/Anthropic SDK HTTP calls with httpx.M
 the wire formats can be exercised without hitting real providers."""
 
 import json
+from typing import Any
 
 import httpx
-from anthropic import Anthropic
+from anthropic import Anthropic, _base_client as anthropic_base_client
 from openai import OpenAI
 
 from yucode.base import Config, ProviderConfig
 from yucode.session import Session
 
+anthropic_http = getattr(anthropic_base_client, "httpx2", httpx)
+
 
 class _MockClientFactory:
     """Factory that returns a fresh OpenAI client on each call, all sharing one request log."""
 
+    http = httpx
+
     def __init__(self, responses: list, base_url: str = "http://test"):
         self.responses = list(responses)
-        self.calls: list[httpx.Request] = []
+        self.calls: list[Any] = []
         self.base_url = base_url
 
-    def _next_response(self, request: httpx.Request) -> httpx.Response:
+    def _next_response(self, request: Any) -> Any:
         self.calls.append(request)
         response = self.responses.pop(0)
         if isinstance(response, int):
-            return httpx.Response(response)
+            return self.http.Response(response)
         status, body = response
-        return httpx.Response(status, json=body)
+        return self.http.Response(status, json=body)
 
     def __call__(self, **kwargs) -> OpenAI:
-        transport = httpx.MockTransport(self._next_response)
-        http_client = httpx.Client(transport=transport)
+        transport = self.http.MockTransport(self._next_response)
+        http_client = self.http.Client(transport=transport)
         return OpenAI(
             api_key="sk-test",
             base_url=kwargs.get("base_url", self.base_url),
@@ -63,9 +68,11 @@ class _StreamClientFactory:
 class _AnthropicMockClientFactory(_MockClientFactory):
     """Factory that returns fresh Anthropic clients over the shared mocked response queue."""
 
+    http = anthropic_http
+
     def __call__(self, **kwargs) -> Anthropic:
-        transport = httpx.MockTransport(self._next_response)
-        http_client = httpx.Client(transport=transport)
+        transport = self.http.MockTransport(self._next_response)
+        http_client = self.http.Client(transport=transport)
         return Anthropic(
             api_key="sk-test",
             base_url=kwargs.get("base_url", self.base_url),
@@ -77,16 +84,16 @@ class _AnthropicMockClientFactory(_MockClientFactory):
 class _AnthropicStreamClientFactory:
     def __init__(self, events: list[tuple[str, dict]], base_url: str = "http://test"):
         self.events = events
-        self.calls: list[httpx.Request] = []
+        self.calls: list[Any] = []
         self.base_url = base_url
 
     def __call__(self) -> Anthropic:
-        def respond(request: httpx.Request) -> httpx.Response:
+        def respond(request: Any) -> Any:
             self.calls.append(request)
             body = "".join(f"event: {name}\ndata: {json.dumps(event)}\n\n" for name, event in self.events)
-            return httpx.Response(200, text=body, headers={"content-type": "text/event-stream"})
+            return anthropic_http.Response(200, text=body, headers={"content-type": "text/event-stream"})
 
-        http_client = httpx.Client(transport=httpx.MockTransport(respond))
+        http_client = anthropic_http.Client(transport=anthropic_http.MockTransport(respond))
         return Anthropic(api_key="sk-test", base_url=self.base_url, http_client=http_client, max_retries=0)
 
 

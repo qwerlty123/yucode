@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import hashlib
+import inspect
 import json
 import re
 import threading
@@ -1066,6 +1067,7 @@ class ModelClient:
         messages = Text.value(messages)
         params = self.anthropic_params(messages, tools, include_builtin_tools=include_builtin_tools)
         client = self.anthropic_client()
+        params = self.anthropic_sdk_params(client.messages.create, params)
         stream = allow_stream and self.session.config.provider.stream and self.on_stream is not None  # 同 chat 路径:三条件齐备才流式
         if stream:
             result = self.call_client(client, lambda: self._anthropic_stream(client, params))
@@ -1076,6 +1078,23 @@ class ModelClient:
         self._record_usage(self.message_field(result, "usage"))
         assistant, calls, content = self.anthropic_result(result, streamed)
         return assistant, calls, content
+
+    @staticmethod
+    def anthropic_sdk_params(create: Callable[..., Any], params: Json) -> Json:
+        """把线上协议参数适配到当前 Anthropic SDK 的调用签名。
+
+        Anthropic 1.x 从 ``Messages.create`` 删除了 ``temperature`` 形参,但兼容主机仍可以
+        在 wire body 中接收它。新 SDK 通过 ``extra_body`` 携带这类字段;旧 SDK 则保留正式形参。
+        """
+        if "temperature" not in params or "temperature" in inspect.signature(create).parameters:
+            return params
+        adapted = dict(params)
+        temperature = adapted.pop("temperature")
+        raw_extra_body = adapted.get("extra_body")
+        extra_body = dict(raw_extra_body) if isinstance(raw_extra_body, dict) else {}
+        extra_body["temperature"] = temperature
+        adapted["extra_body"] = extra_body
+        return adapted
 
     def _anthropic_stream(self, client: Anthropic, params: Json) -> Any:
         """消费 Messages 内容块,当文本块与工具块都已确定时提升输出完成状态。
