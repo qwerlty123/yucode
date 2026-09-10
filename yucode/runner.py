@@ -809,13 +809,15 @@ class ToolRunner:
 
     def short_call(self, call: ToolCall, args: list[str] | None = None) -> str:
         tool_class = self.catalog.get(call.name)
-        if args is None:
+        if args is not None:
+            resolved_args = args
+        else:
             try:
                 # 工具自带 short_args 用它(如 Bash 只显示命令首段),否则压缩参数为单行。
-                args = tool_class(self.session, call.args).short_args() if tool_class is not None else [Tool.compact(arg) for arg in call.args]
+                resolved_args = tool_class(self.session, call.args).short_args() if tool_class is not None else [Tool.compact(arg) for arg in call.args]
             except Exception:  # noqa: BLE001 - 展示格式化必须对畸形工具参数做兜底
-                args = [Tool.compact(arg) for arg in call.args]  # 参数畸形时展示兜底到压缩形式
-        text = " ".join([call.name, *args]).strip()
+                resolved_args = [Tool.compact(arg) for arg in call.args]  # 参数畸形时展示兜底到压缩形式
+        text = " ".join([call.name, *resolved_args]).strip()
         return text if "\n" in text else self.oneline(text, 200)  # 多行参数保留原样,单行则截断到 200 字符
 
     @staticmethod
